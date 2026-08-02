@@ -1,0 +1,28 @@
+# Databases
+data/db/*.db
+
+# Model weights (download separately)
+models/yolo/*.onnx
+models/yolo/*.pt
+models/face/models/
+
+# Local config with credentials
+config/go2rtc.yaml
+
+# Virtual environment
+.venv/
+__pycache__/
+*.pyc
+
+# Snapshots
+data/snapshots/
+
+# Output videos
+data/output_*.mp4
+
+# OS files
+.DS_Store
+
+# Temp
+/tmp/
+*.tmp

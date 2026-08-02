@@ -1,0 +1,8 @@
+19:54:10.059 INF go2rtc platform=darwin/amd64 revision=b5948cf version=1.9.14
+19:54:10.061 INF config path=/Users/macbookpro/Desktop/person-face-events/go2rtc.yaml
+19:54:10.065 INF [rtsp] listen addr=:8554
+19:54:10.065 INF [api] listen addr=:1984
+19:54:10.067 INF [webrtc] listen tcp addr=[::]:8555
+19:54:10.068 INF [webrtc] listen udp addr=192.168.1.13:8555
+19:54:10.069 INF [webrtc] listen udp addr=192.168.2.100:8555
+20:49:22.839 WRN github.com/AlexxIT/go2rtc/internal/streams/producer.go:170 > error="read tcp 192.168.2.100:51879->192.168.2.112:554: i/o timeout" url=rtsp://admin:admin1234@192.168.2.112:554/cam/realmonitor?channel=1&subtype=0

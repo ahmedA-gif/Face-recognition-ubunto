@@ -1,0 +1,11 @@
+# go2rtc config — restreams your Dahua/IMOU camera to localhost
+# Web UI: http://127.0.0.1:1984
+# Streams:
+#   main: rtsp://127.0.0.1:8554/cam_01
+#   sub : rtsp://127.0.0.1:8554/cam_01_sub
+
+streams:
+  cam_01:
+    - rtsp://admin:admin1234@192.168.2.112:554/cam/realmonitor?channel=1&subtype=0
+  cam_01_sub:
+    - rtsp://admin:admin1234@192.168.2.112:554/cam/realmonitor?channel=1&subtype=1
