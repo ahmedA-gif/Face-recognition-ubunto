@@ -44,10 +44,10 @@ python3 -c "from insightface.app import FaceAnalysis; app=FaceAnalysis(name='buf
 python3 scripts/check_models.py
 
 # 5. Configure camera
-# Edit config/go2rtc.yaml with your CCTV camera IP/credentials
-# settings.yaml already points to go2rtc (rtsp://127.0.0.1:8554/cam_01_sub)
+# Edit config/go2rtc.yaml (or go2rtc.yaml in project root) with your CCTV IP
+# Default: rtsp://admin:admin1234@192.168.2.112:554/cam/realmonitor?channel=1&subtype=0
 
-# 6. Run (same as Mac)
+# 6. Run (go2rtc auto-downloads on first run)
 ./scripts/start_go2rtc.sh        # terminal 1
 python3 scripts/run_video.py     # terminal 2
 

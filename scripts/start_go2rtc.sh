@@ -6,23 +6,30 @@ set -e
 cd "$(dirname "$0")/.."
 mkdir -p data
 
+# Download go2rtc for Linux if not installed
+if [ ! -f go2rtc ] || ! ./go2rtc --version >/dev/null 2>&1; then
+  echo "Downloading go2rtc for Linux..."
+  ARCH=$(uname -m)
+  if [ "$ARCH" = "x86_64" ]; then
+    curl -L -o go2rtc.zip "https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_amd64.zip"
+  elif [ "$ARCH" = "aarch64" ]; then
+    curl -L -o go2rtc.zip "https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_arm64.zip"
+  else
+    curl -L -o go2rtc.zip "https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_armv7.zip"
+  fi
+  unzip -o go2rtc.zip go2rtc
+  rm -f go2rtc.zip
+  chmod +x go2rtc
+  echo "go2rtc installed: $(./go2rtc --version 2>&1 || echo 'ok')"
+fi
+
 # Create go2rtc.yaml from example if not exists
 if [ ! -f go2rtc.yaml ]; then
   if [ -f config/go2rtc.yaml.example ]; then
     cp config/go2rtc.yaml.example go2rtc.yaml
-    echo "Created go2rtc.yaml from example — edit it with your camera credentials"
+    echo "Created go2rtc.yaml — edit it with your camera credentials"
     exit 0
   fi
-fi
-
-# Detect camera interface (Linux: eth0/enp0s3, macOS: en6/en7)
-CAM_IF=$(ip -o link show | awk -F': ' '!/lo/{print $2; exit}' 2>/dev/null || echo "eth0")
-
-# Ensure direct-connection ethernet has an IP on the camera subnet
-if ! ip addr show "$CAM_IF" 2>/dev/null | grep -q "192.168.2."; then
-  echo "Setting $CAM_IF to 192.168.2.100 (camera subnet)…"
-  sudo ip addr add 192.168.2.100/24 dev "$CAM_IF" 2>/dev/null || true
-  sudo ip link set "$CAM_IF" up
 fi
 
 if pgrep -x go2rtc >/dev/null 2>&1; then
@@ -31,4 +38,13 @@ if pgrep -x go2rtc >/dev/null 2>&1; then
 fi
 
 nohup ./go2rtc -c go2rtc.yaml > data/go2rtc.log 2>&1 &
-echo "go2rtc started (PID $!). Web UI: http://127.0.0.1:1984"
+sleep 2
+
+# Verify it started
+if pgrep -x go2rtc >/dev/null 2>&1; then
+  echo "go2rtc started (PID $!). Web UI: http://127.0.0.1:1984"
+else
+  echo "go2rtc failed to start. Check data/go2rtc.log"
+  cat data/go2rtc.log 2>/dev/null | tail -20
+  exit 1
+fi
