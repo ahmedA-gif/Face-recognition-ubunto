@@ -71,8 +71,28 @@ if ping -c 3 -W 2 "$CAM_IP" >/dev/null 2>&1; then
   echo "  ✓ Camera responds to ping"
 else
   echo "  ✗ No ping reply from $CAM_IP"
-  echo "    Check: cable plugged in? adapter present? camera powered on?"
-  echo "    Scan subnets to find the camera:  nmap -sn 192.168.2.0/24 192.168.0.0/24 192.168.1.0/24"
+fi
+
+echo "── Checking physical link state ──"
+if command -v ip >/dev/null 2>&1; then
+  LINK_STATE=$(ip link show "$CAM_IF" 2>/dev/null | grep -o "state [A-Z]*")
+  CARRIER=$(cat /sys/class/net/"$CAM_IF"/carrier 2>/dev/null || echo "?")
+  echo "  $CAM_IF: $LINK_STATE (carrier=$CARRIER)"
+  if [ "$CARRIER" = "0" ]; then
+    echo "  ✗ NO CABLE LINK — ethernet cable is not detected."
+    echo "    • Plug the cable into the camera AND the adapter"
+    echo "    • Make sure the camera is powered on (LED lit)"
+    echo "    • Try a different cable / port"
+  fi
+else
+  ifconfig "$CAM_IF" 2>/dev/null | grep -E "status|media"
+fi
+
+echo "── Scanning 192.168.2.x for the camera ──"
+if command -v nmap >/dev/null 2>&1; then
+  nmap -sn 192.168.2.0/24 2>/dev/null | grep -E "report|Host is up" || echo "  (nothing found)"
+else
+  echo "  (nmap not installed — run: sudo apt install nmap)"
 fi
 
 echo "── Checking RTSP port 554 ──"
@@ -80,7 +100,8 @@ if nc -z -w 3 "$CAM_IP" 554 2>/dev/null; then
   echo "  ✓ RTSP port 554 OPEN"
 else
   echo "  ✗ RTSP port 554 closed — camera not reachable on $CAM_IP"
-  echo "    Find the real camera IP:  nmap -p 554 <subnet>"
+  echo "    If the link is UP but no device answers, the camera IP changed —"
+  echo "    scan other subnets:  nmap -sn 192.168.0.0/24 192.168.1.0/24"
 fi
 
 echo "── Done ──"
