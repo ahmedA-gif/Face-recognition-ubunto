@@ -51,20 +51,32 @@ python3 scripts/check_models.py
 ```
 
 ### Step 5: Setup network for CCTV camera
+The camera is connected with a **direct Ethernet cable** (USB-Ethernet adapter or NIC) — it is NOT on WiFi.
+
 ```bash
 # Check your network interfaces
 ip addr show
 
 # Find which interface is connected to camera (UP state, not wl/wifi)
-# Example: enxc8a362908ac9 or eno1
+# Examples: enxc8a362908ac9, eno1, eth0, enp0s3
 
-# Assign IP to camera interface (replace INTERFACE_NAME with yours)
+# Assign IP to the camera interface (replace INTERFACE_NAME with yours)
 sudo ip addr add 192.168.2.100/24 dev INTERFACE_NAME
 sudo ip link set INTERFACE_NAME up
 
 # Test camera connectivity
 ping 192.168.2.112
 ```
+
+**IMPORTANT — check this first if ping fails:**
+- Is the Ethernet cable physically plugged into the camera AND the adapter? (`ip link show` must show `state UP`, not `state DOWN` / `NO-CARRIER`)
+- Is the camera power LED on? Power-cycle the camera (unplug 10s, replug).
+- If the interface does not appear at all, the USB-Ethernet adapter is unplugged or the driver is missing (`lsusb` to check).
+- If the camera is NOT on `192.168.2.x`, scan to find it:
+  ```bash
+  nmap -sn 192.168.2.0/24
+  sudo apt install nmap   # if not installed
+  ```
 
 ### Step 6: Configure camera in go2rtc.yaml
 ```bash
@@ -150,20 +162,24 @@ python3 scripts/run_video.py
 
 ## Gate Line Configuration
 
-The boundary line is configured in `config/settings.yaml`:
+The boundary line is configured in `config/settings.yaml`. It is the **virtual line people cross** when entering/exiting — position it on your door threshold in the camera view:
 
 ```yaml
 entry_exit:
   line:
-    x1: 0.25    # left edge (normalized 0-1)
-    y1: 0.82    # top edge
-    x2: 0.75    # right edge
-    y2: 0.82    # bottom edge
+    x1: 0.18    # left edge of door opening (normalized 0-1)
+    y1: 0.55    # height of line in frame (smaller = further outside)
+    x2: 0.72    # right edge of door opening
+    y2: 0.55    # same height → horizontal line
   entry_direction: "B_to_A"  # B→A = entry (outside → inside)
 ```
 
-- Adjust `x1/y1/x2/y2` to match your gate/door threshold
-- `entry_direction`: which crossing direction = "entry"
+- `y1/y2` = vertical position. **Smaller y = higher in frame = earlier detection** (people cross while still approaching). **Larger y = lower in frame = closer to camera.**
+- `entry_direction`: which crossing direction = "entry". For camera-inside-looking-out: B→A = entering, A→B = leaving.
+- `hysteresis_px: 12` = jitter-suppression band (keep default).
+- Open the live preview, walk through the door, and adjust `y1/y2` until events fire at the right moment.
+
+> **Tip:** with `auto_boundary.enabled: false` (default) the line is fixed/manual. Auto-learning can be enabled, but is OFF by default because noisy trajectories can drag the line off the door and invert entry/exit direction.
 
 ## Face Enrollment
 
@@ -244,7 +260,11 @@ Face-recognition-ubunto/
 # Check your IP
 ip addr show
 
+# Is the camera cable link UP? (look for "state UP", avoid "NO-CARRIER")
+ip link show
+
 # Find camera on network
+nmap -sn 192.168.2.0/24
 nmap -p 554 192.168.2.0/24
 
 # Check go2rtc logs
@@ -253,3 +273,15 @@ cat data/go2rtc.log
 # Test camera directly (without go2rtc)
 ffplay rtsp://admin:admin1234@192.168.2.112:554/cam/realmonitor?channel=1&subtype=1
 ```
+
+### Common Camera Issues
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `I/O timeout` / `No route to host` | Ethernet cable not connected OR interface has no IP | Plug cable in; `sudo ip addr add 192.168.2.100/24 dev <iface>`; check `ip link show` = `UP` |
+| `ifconfig: interface en6 does not exist` | USB-Ethernet adapter unplugged | Replug adapter; re-assign IP |
+| Camera not responding on 192.168.2.x | Camera on a different subnet | `nmap -sn 192.168.0.0/24` and `nmap -sn 192.168.1.0/24` to find it |
+| Port 554 closed on another device | That device is not the camera (e.g. another NAS/router) | Match the IP that has RTSP 554 open |
+| Wrong IP in config | `go2rtc.yaml` uses wrong address | Edit `go2rtc.yaml` to your camera's real IP |
+
+> **Why the camera is not on WiFi:** it connects by a direct cable into the laptop's USB-Ethernet adapter (e.g. AX88179A, appears as `en6`/`enxc8a362908ac9`). WiFi is usually on a different subnet (e.g. 192.168.0.x) and cannot reach the camera.
