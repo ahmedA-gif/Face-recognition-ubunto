@@ -43,15 +43,20 @@ python3 -c "from insightface.app import FaceAnalysis; app=FaceAnalysis(name='buf
 # Verify all models
 python3 scripts/check_models.py
 
-# 5. Configure camera
+# 5. Configure camera (CCTV via RTSP)
 # Edit config/settings.yaml:
-#   camera.source: "rtsp://admin:password@192.168.1.112:554/cam/realmonitor?channel=1&subtype=0"
-#   camera.password: "your_password"
-#   entry_exit.line: adjust to match your gate geometry
+camera:
+  source: "rtsp://admin:admin1234@192.168.1.112:554/cam/realmonitor?channel=1&subtype=0"
+# Or via go2rtc (recommended):
+#   source: "rtsp://127.0.0.1:8554/cam_01_sub"
+# Also edit config/go2rtc.yaml with your camera IP
 
 # 6. Run
 ./scripts/start_go2rtc.sh
 python3 scripts/run_video.py
+
+# Or run directly without go2rtc
+python3 scripts/run_video.py --source "rtsp://admin:admin1234@192.168.1.112:554/cam/realmonitor?channel=1&subtype=0"
 
 # 7. Enroll faces (first time)
 mkdir -p data/faces_gallery/YourName
@@ -158,15 +163,23 @@ python3 scripts/run_video.py --source data/test_video.mp4 --max-frames 160 --no-
 # Full test with display
 python3 scripts/run_video.py --source data/test_video.mp4
 
-# CCTV live
+# CCTV live (via go2rtc)
 python3 scripts/run_video.py
+
+# CCTV live (direct RTSP, no go2rtc)
+python3 scripts/run_video.py --source "rtsp://admin:admin1234@192.168.1.112:554/cam/realmonitor?channel=1&subtype=0"
+
+# Find camera IP if not sure
+nmap -p 554 192.168.1.0/24
 ```
 
 ## Project Structure
 
 ```text
 attendance-system/
-├── config/settings.yaml       # camera, thresholds, line config
+├── config/
+│   ├── settings.yaml         # camera, thresholds, line config
+│   └── go2rtc.yaml           # RTSP streaming proxy config
 ├── src/
 │   ├── capture/               # camera stream
 │   ├── detection/             # YOLO person detection
@@ -187,7 +200,10 @@ attendance-system/
 
 ## Troubleshooting
 
-- **Camera not connecting**: Check IP, credentials, and interface (`ip addr show`)
+- **Camera not connecting**: Check IP, credentials, and network (`ping 192.168.1.112`)
+- **Cannot open camera source**: Don't use camera index (0,1,2) — use RTSP URL for CCTV
+- **RTSP connection failed**: Ensure go2rtc is running (`./scripts/start_go2rtc.sh`)
 - **No face detection**: Ensure face models downloaded, increase `min_face_px`
 - **Wrong entry/exit**: Adjust `entry_exit.line` and `entry_direction` in settings.yaml
-- **Slow performance**: Use sub stream (`subtype=0`), reduce `yolo_imgsz` to 320
+- **Slow performance**: Use sub stream (`subtype=1`), reduce `yolo_imgsz` to 320
+- **Permission denied**: `sudo chmod +x scripts/start_go2rtc.sh`
