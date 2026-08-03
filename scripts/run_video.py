@@ -17,7 +17,7 @@ Usage examples
     python scripts/run_video.py --source 0
 
 # Live CCTV (override settings.yaml):
-    python scripts/run_video.py --source "rtsp://admin:admin1234@192.168.1.112:554/cam/realmonitor?channel=1&subtype=0"
+    python scripts/run_video.py --source "rtsp://admin:admin1234@192.168.2.112:554/cam/realmonitor?channel=1&subtype=0"
 
 Controls
 --------

@@ -9,6 +9,11 @@ models/face/models/
 # Local config with credentials
 config/go2rtc.yaml
 
+# go2rtc binary / zip (downloaded by scripts/start_go2rtc.sh)
+/go2rtc
+/go2rtc.zip
+data/go2rtc.log
+
 # Virtual environment
 .venv/
 __pycache__/

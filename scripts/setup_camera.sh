@@ -24,17 +24,27 @@ if command -v ip >/dev/null 2>&1; then
     case "$iface" in
       wl*|ww*|docker*|veth*|br-*|virbr*|tun*|tap*) continue ;;
     esac
-    [ -z "$CAM_IF" ] && CAM_IF="$iface"
+    carrier=$(cat "/sys/class/net/$iface/carrier" 2>/dev/null || echo 0)
+    [ "$carrier" != "1" ] && continue
     case "$iface" in
       enx*|usb*) CAM_IF="$iface"; break ;;
+      *) [ -z "$CAM_IF" ] && CAM_IF="$iface" ;;
     esac
   done
   if [ -z "$CAM_IF" ]; then
-    echo "  ERROR: no wired interface found. Is the camera's Ethernet adapter plugged in?"
+    echo "  ERROR: no wired interface with a live cable (carrier=1) found."
+    echo "         Is the camera's Ethernet adapter plugged in and the camera powered?"
     ip link show
     exit 1
   fi
-  echo "  Interface: $CAM_IF"
+  echo "  Interface: $CAM_IF (carrier=1)"
+  # Remove stale copy of the camera IP from dead interfaces (e.g. eno1 NO-CARRIER)
+  for iface in $(ip -o addr show | awk -F': ' "/${LOCAL_IP%/*}/{print \$2}"); do
+    if [ "$iface" != "$CAM_IF" ]; then
+      echo "  Removing stale $LOCAL_IP from $iface (no cable link)..."
+      sudo ip addr del "$LOCAL_IP/24" dev "$iface" 2>/dev/null || true
+    fi
+  done
   if ! ip addr show dev "$CAM_IF" | grep -q "$LOCAL_IP"; then
     echo "  Assigning $LOCAL_IP/24 on $CAM_IF …"
     sudo ip addr add "$LOCAL_IP/24" dev "$CAM_IF" 2>/dev/null || true

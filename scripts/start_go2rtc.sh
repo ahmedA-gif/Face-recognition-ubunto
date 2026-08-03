@@ -31,29 +31,37 @@ if [ ! -f go2rtc.yaml ]; then
   fi
 fi
 
-# Find the USB ethernet adapter connected to camera and assign IP
-# Priority: 1) enx* (USB-Ethernet, e.g. enxc8a362908ac9)  2) any non-wifi NIC
+# Find the wired interface with a LIVE cable (carrier=1) connected to the camera
+# Priority: 1) enx*/usb* USB-Ethernet adapter with carrier  2) any non-wifi NIC with carrier
+# This avoids assigning the camera IP to a dead port (e.g. eno1 NO-CARRIER).
 CAM_IF=""
 for iface in $(ip -o link show | awk -F': ' '!/lo/{print $2}'); do
   case "$iface" in
     wl*|ww*|docker*|veth*|br-*|virbr*|tun*|tap*) continue ;;
   esac
-  if [ -z "$CAM_IF" ]; then
-    CAM_IF="$iface"
-  fi
+  carrier=$(cat "/sys/class/net/$iface/carrier" 2>/dev/null || echo 0)
+  [ "$carrier" != "1" ] && continue
   case "$iface" in
     enx*|usb*) CAM_IF="$iface"; break ;;   # prefer USB ethernet adapter
+    *) [ -z "$CAM_IF" ] && CAM_IF="$iface" ;;
   esac
 done
 if [ -z "$CAM_IF" ]; then
-  echo "ERROR: no wired interface found. Is the camera's USB-Ethernet adapter plugged in?"
+  echo "ERROR: no wired interface with a live cable (carrier=1) found."
+  echo "       Is the camera's USB-Ethernet adapter plugged in and the camera powered?"
   ip link show
   exit 1
 fi
-echo "Using camera interface: $CAM_IF"
+echo "Using camera interface: $CAM_IF (carrier=1)"
 
-# Check if any interface has 192.168.2.x — if not, assign to USB ethernet
-if ! ip addr show | grep -q "192.168.2."; then
+# Move 192.168.2.100/24 onto the live camera interface (remove stale copies)
+for iface in $(ip -o addr show | awk -F': ' '/192\.168\.2\.100/{print $2}'); do
+  if [ "$iface" != "$CAM_IF" ]; then
+    echo "Removing stale 192.168.2.100/24 from $iface (no cable link)..."
+    sudo ip addr del 192.168.2.100/24 dev "$iface" 2>/dev/null || true
+  fi
+done
+if ! ip addr show dev "$CAM_IF" | grep -q "192.168.2.100"; then
   echo "Adding 192.168.2.100 to $CAM_IF for camera access..."
   sudo ip addr add 192.168.2.100/24 dev "$CAM_IF" 2>/dev/null || true
   sudo ip link set "$CAM_IF" up
