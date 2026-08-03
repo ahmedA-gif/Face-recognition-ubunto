@@ -10,17 +10,15 @@ mkdir -p data
 if [ ! -f go2rtc ] || ! ./go2rtc --version >/dev/null 2>&1; then
   echo "Downloading go2rtc for Linux..."
   ARCH=$(uname -m)
-  if [ "$ARCH" = "x86_64" ]; then
-    curl -L -o go2rtc.zip "https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_amd64.zip"
-  elif [ "$ARCH" = "aarch64" ]; then
-    curl -L -o go2rtc.zip "https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_arm64.zip"
-  else
-    curl -L -o go2rtc.zip "https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_armv7.zip"
-  fi
-  unzip -o go2rtc.zip go2rtc
-  rm -f go2rtc.zip
+  case "$ARCH" in
+    x86_64)  URL="https://github.com/AlexxIT/go2rtc/releases/download/v1.9.14/go2rtc_linux_amd64" ;;
+    aarch64) URL="https://github.com/AlexxIT/go2rtc/releases/download/v1.9.14/go2rtc_linux_arm64" ;;
+    armv7l)  URL="https://github.com/AlexxIT/go2rtc/releases/download/v1.9.14/go2rtc_linux_armv7" ;;
+    *)       echo "Unsupported arch: $ARCH"; exit 1 ;;
+  esac
+  curl -L -o go2rtc "$URL"
   chmod +x go2rtc
-  echo "go2rtc installed: $(./go2rtc --version 2>&1 || echo 'ok')"
+  echo "go2rtc installed"
 fi
 
 # Create go2rtc.yaml from example if not exists
@@ -40,7 +38,6 @@ fi
 nohup ./go2rtc -c go2rtc.yaml > data/go2rtc.log 2>&1 &
 sleep 2
 
-# Verify it started
 if pgrep -x go2rtc >/dev/null 2>&1; then
   echo "go2rtc started (PID $!). Web UI: http://127.0.0.1:1984"
 else
