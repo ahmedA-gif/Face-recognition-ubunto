@@ -52,6 +52,11 @@ python3 scripts/check_models.py
 # 6. Run
 ./scripts/start_go2rtc.sh
 python3 scripts/run_video.py
+
+# 7. Enroll faces (first time)
+mkdir -p data/faces_gallery/YourName
+cp /path/to/your/photo.jpg data/faces_gallery/YourName/
+python3 scripts/enroll_faces.py
 ```
 
 ## Model Downloads
@@ -99,6 +104,50 @@ entry_exit:
 
 - Adjust `x1/y1/x2/y2` to match your gate/door threshold
 - `entry_direction`: which crossing direction = "entry"
+
+## Face Enrollment
+
+Enroll face photos so the system can recognize people.
+
+### Folder Structure
+
+```
+data/faces_gallery/
+    Ahmed/
+        photo1.jpg
+        photo2.png
+    Sara/
+        headshot.jpg
+```
+
+### Commands
+
+```bash
+# Single person — one photo
+python3 scripts/enroll_faces.py --name Ahmed --image path/to/photo.jpg
+
+# Bulk enroll — all people in data/faces_gallery/
+python3 scripts/enroll_faces.py
+
+# Re-enroll from scratch (wipes DB first)
+python3 scripts/enroll_faces.py --clear
+
+# List enrolled people
+python3 scripts/enroll_faces.py --list
+
+# Quick enroll (simpler script, same bulk behavior)
+python3 scripts/enroll_face.py
+```
+
+### Verify Enrollment
+
+```bash
+# Check gallery status
+python3 scripts/enroll_faces.py --list
+
+# Test recognition on a video
+python3 scripts/run_video.py --source data/test_video.mp4 --max-frames 160 --no-display
+```
 
 ## Test Commands
 
