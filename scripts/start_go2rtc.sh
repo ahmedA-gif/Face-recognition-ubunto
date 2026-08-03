@@ -31,12 +31,18 @@ if [ ! -f go2rtc.yaml ]; then
   fi
 fi
 
-# Ensure network interface is on camera subnet (192.168.2.x)
-CAM_IF=$(ip -o link show | awk -F': ' '!/lo/{print $2; exit}' 2>/dev/null || echo "eth0")
-if ! ip addr show "$CAM_IF" 2>/dev/null | grep -q "192.168.2."; then
+# Find the USB ethernet adapter connected to camera and assign IP
+CAM_IF=$(ip -o link show | awk -F': ' '!/lo/{print $2}' | grep -v wl | grep -v docker | head -1)
+if [ -z "$CAM_IF" ]; then
+  CAM_IF="eno1"
+fi
+
+# Check if any interface has 192.168.2.x — if not, assign to USB ethernet
+if ! ip addr show | grep -q "192.168.2."; then
   echo "Adding 192.168.2.100 to $CAM_IF for camera access..."
   sudo ip addr add 192.168.2.100/24 dev "$CAM_IF" 2>/dev/null || true
   sudo ip link set "$CAM_IF" up
+  sleep 2
 fi
 
 if pgrep -x go2rtc >/dev/null 2>&1; then
