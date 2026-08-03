@@ -1,92 +1,105 @@
-# Person Face Events (CPU)
+# Attendance System (Ubuntu Linux)
 
-Lean CPU pipeline for:
+Face recognition + person tracking attendance system with auto check-in/check-out.
 
-- **Person detection only** (YOLO nano)
-- **Face detection + recognition** (InsightFace SCRFD + ArcFace)
-- **Tracking** (ByteTrack)
-- **Counting + Entry/Exit events** (virtual line)
-- **Low-latency stream** via go2rtc (optional)
-- **Live overlay animation** on camera frames
+## Features
 
-## Event fields
+- Person detection (YOLO nano)
+- Face detection + recognition (InsightFace ArcFace)
+- Tracking (ByteTrack)
+- Entry/exit events via virtual boundary line
+- Auto attendance: check-in/check-out with Late/Early status
+- Identity fusion (re-identification across track fragments)
+- Guest IDs for unknown persons
 
-Each entry/exit stores: `date`, `time`, `person`, `direction` (`entry` | `exit`).
+## Ubuntu Setup
 
-## Project structure
+```bash
+# 1. Install system dependencies
+sudo apt update
+sudo apt install python3.12 python3.12-venv python3-pip ffmpeg libgl1-mesa-glx libglib2.0-0
+
+# 2. Clone and setup
+git clone https://github.com/ahmedA-gif/attendance-system.git
+cd attendance-system
+python3.12 -m venv .venv
+source .venv/bin/activate
+
+# 3. Install Python dependencies
+pip install -r requirements.txt
+pip install faiss-cpu
+
+# 4. Download models (if not included)
+# YOLO: models/yolo/yolo11n.pt + yolo11n.onnx
+# InsightFace buffalo_l: auto-downloads on first run
+
+# 5. Configure camera
+# Edit config/settings.yaml:
+#   camera.source: "rtsp://admin:password@192.168.1.112:554/cam/realmonitor?channel=1&subtype=0"
+#   camera.password: "your_password"
+#   entry_exit.line: adjust to match your gate geometry
+
+# 6. Run
+./scripts/start_go2rtc.sh
+python3 scripts/run_video.py
+```
+
+## Gate Line Configuration
+
+The boundary line is configured in `config/settings.yaml`:
+
+```yaml
+entry_exit:
+  line:
+    x1: 0.25    # left edge (normalized 0-1)
+    y1: 0.82    # top edge
+    x2: 0.75    # right edge
+    y2: 0.82    # bottom edge
+  entry_direction: "B_to_A"  # B→A = entry (outside → inside)
+```
+
+- Adjust `x1/y1/x2/y2` to match your gate/door threshold
+- `entry_direction`: which crossing direction = "entry"
+
+## Test Commands
+
+```bash
+# Quick test (no display, 160 frames)
+python3 scripts/run_video.py --source data/test_video.mp4 --max-frames 160 --no-display
+
+# Full test with display
+python3 scripts/run_video.py --source data/test_video.mp4
+
+# CCTV live
+python3 scripts/run_video.py
+```
+
+## Project Structure
 
 ```text
-person-face-events/
-├── config/
-│   ├── settings.yaml          # app settings (camera, thresholds, line)
-│   └── go2rtc.yaml            # low-latency streaming
-├── notebooks/
-│   ├── 00_project_runner.ipynb
-│   ├── 01_download_yolo.ipynb
-│   ├── 02_download_bytetrack.ipynb
-│   ├── 03_download_face_models.ipynb
-│   └── 04_verify_models_cpu.ipynb
-│   └── 05_test_uploaded_video.ipynb
-├── models/
-│   ├── yolo/                  # yolov8n / yolo11n weights + onnx
-│   ├── face/                  # InsightFace buffalo_s pack
-│   └── tracker/               # ByteTrack config / notes
-├── data/
-│   ├── faces_gallery/         # enrolled face images (name folders)
-│   ├── snapshots/             # optional event crops
-│   └── db/                    # SQLite: faces + events
+attendance-system/
+├── config/settings.yaml       # camera, thresholds, line config
 ├── src/
-│   ├── capture/               # OpenCV / go2rtc RTSP
-│   ├── detection/             # person YOLO
-│   ├── tracking/              # ByteTrack
-│   ├── recognition/           # face detect + ArcFace match
-│   ├── events/                # entry/exit + SQLite
-│   ├── overlay/               # boxes + pulse animation
+│   ├── capture/               # camera stream
+│   ├── detection/             # YOLO person detection
+│   ├── tracking/              # ByteTrack + identity fusion
+│   ├── recognition/           # face detection + ArcFace
+│   ├── events/                # entry/exit + dynamic boundary
+│   ├── reasoning/             # spatial-temporal reasoning
+│   ├── attendance/            # check-in/check-out manager
+│   ├── overlay/               # live visualization
 │   └── utils/
-├── scripts/
-│   ├── enroll_face.py
-│   └── run_pipeline.py
-├── web/                       # optional MJPEG preview
-├── tests/
-├── requirements.txt
-└── main.py
+├── scripts/                   # run scripts
+├── tests/                     # unit tests
+└── data/
+    ├── faces_gallery/         # enrolled face images
+    ├── db/                    # SQLite databases
+    └── snapshots/             # event crops
 ```
 
-## Quick start
+## Troubleshooting
 
-```bash
-cd ~/Desktop/person-face-events
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# Use a fresh venv for this project if possible; mixing in unrelated ML packages
-# can force incompatible NumPy / SciPy / Torch versions.
-
-# 1) Download models via notebooks (or run cells top-to-bottom)
-jupyter notebook notebooks/
-
-# 2) Enroll faces: data/faces_gallery/Ahmed/img1.jpg ...
-python scripts/enroll_face.py
-
-# 3) Test an uploaded video first
-python main.py --source /path/to/video.mp4 --output outputs/test_annotated.mp4 --no-display
-
-# 4) Then run CCTV / go2rtc
-python main.py --source rtsp://127.0.0.1:8554/cam_01_sub
-```
-
-If you want the notebooks or the optional preview API, install those extras separately:
-
-```bash
-pip install jupyter ipywidgets tqdm requests fastapi uvicorn
-```
-
-## CPU notes
-
-- YOLO: `yolo11n` or `yolov8n` (nano only)
-- Face: InsightFace `buffalo_s`
-- Tracker: ByteTrack (CPU)
-- Prefer go2rtc substream + `CAP_PROP_BUFFERSIZE=1`
-- Process every Nth frame; tracker fills gaps
-- Use `main.py --source <video-or-rtsp>` to switch between uploaded video testing and CCTV
+- **Camera not connecting**: Check IP, credentials, and interface (`ip addr show`)
+- **No face detection**: Ensure face models downloaded, increase `min_face_px`
+- **Wrong entry/exit**: Adjust `entry_exit.line` and `entry_direction` in settings.yaml
+- **Slow performance**: Use sub stream (`subtype=0`), reduce `yolo_imgsz` to 320

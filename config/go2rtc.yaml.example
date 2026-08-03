@@ -1,0 +1,11 @@
+streams:
+  cam_01:
+    - rtsp://admin:YOUR_PASSWORD@192.168.1.112:554/cam/realmonitor?channel=1&subtype=0
+  cam_01_sub:
+    - rtsp://admin:YOUR_PASSWORD@192.168.1.112:554/cam/realmonitor?channel=1&subtype=1
+
+api:
+  listen: ":1984"
+
+rtsp:
+  listen: ":8554"
