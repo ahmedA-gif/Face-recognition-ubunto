@@ -25,9 +25,18 @@ fi
 if [ ! -f go2rtc.yaml ]; then
   if [ -f config/go2rtc.yaml.example ]; then
     cp config/go2rtc.yaml.example go2rtc.yaml
-    echo "Created go2rtc.yaml — edit it with your camera credentials"
-    exit 0
+  else
+    echo "No go2rtc.yaml found. Copy config/go2rtc.yaml to project root."
+    exit 1
   fi
+fi
+
+# Ensure network interface is on camera subnet (192.168.2.x)
+CAM_IF=$(ip -o link show | awk -F': ' '!/lo/{print $2; exit}' 2>/dev/null || echo "eth0")
+if ! ip addr show "$CAM_IF" 2>/dev/null | grep -q "192.168.2."; then
+  echo "Adding 192.168.2.100 to $CAM_IF for camera access..."
+  sudo ip addr add 192.168.2.100/24 dev "$CAM_IF" 2>/dev/null || true
+  sudo ip link set "$CAM_IF" up
 fi
 
 if pgrep -x go2rtc >/dev/null 2>&1; then
@@ -41,7 +50,7 @@ sleep 2
 if pgrep -x go2rtc >/dev/null 2>&1; then
   echo "go2rtc started (PID $!). Web UI: http://127.0.0.1:1984"
 else
-  echo "go2rtc failed to start. Check data/go2rtc.log"
+  echo "go2rtc failed. Check data/go2rtc.log"
   cat data/go2rtc.log 2>/dev/null | tail -20
   exit 1
 fi
