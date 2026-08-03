@@ -20,8 +20,8 @@ sudo apt update
 sudo apt install python3.12 python3.12-venv python3-pip ffmpeg libgl1-mesa-glx libglib2.0-0
 
 # 2. Clone and setup
-git clone https://github.com/ahmedA-gif/attendance-system.git
-cd attendance-system
+git clone https://github.com/ahmedA-gif/Face-recognition-ubunto.git
+cd Face-recognition-ubunto
 python3.12 -m venv .venv
 source .venv/bin/activate
 
@@ -29,9 +29,19 @@ source .venv/bin/activate
 pip install -r requirements.txt
 pip install faiss-cpu
 
-# 4. Download models (if not included)
-# YOLO: models/yolo/yolo11n.pt + yolo11n.onnx
-# InsightFace buffalo_l: auto-downloads on first run
+# 4. Download models
+# YOLO (person detection)
+mkdir -p models/yolo
+python3 -c "from ultralytics import YOLO; m=YOLO('yolo11n.pt'); m.export(format='onnx',imgsz=416,simplify=True,dynamic=False)"
+mv yolo11n.pt models/yolo/
+mv yolo11n.onnx models/yolo/
+
+# InsightFace buffalo_l (face detection + recognition)
+mkdir -p models/face/models
+python3 -c "from insightface.app import FaceAnalysis; app=FaceAnalysis(name='buffalo_l',root='models/face',providers=['CPUExecutionProvider']); app.prepare(ctx_id=-1,det_size=(640,640))"
+
+# Verify all models
+python3 scripts/check_models.py
 
 # 5. Configure camera
 # Edit config/settings.yaml:
@@ -42,6 +52,35 @@ pip install faiss-cpu
 # 6. Run
 ./scripts/start_go2rtc.sh
 python3 scripts/run_video.py
+```
+
+## Model Downloads
+
+| Model | Size | Path | Source |
+|-------|------|------|--------|
+| YOLOv11n (PT) | ~5.6 MB | `models/yolo/yolo11n.pt` | Ultralytics |
+| YOLOv11n (ONNX) | ~10.2 MB | `models/yolo/yolo11n.onnx` | Exported from PT |
+| buffalo_l (5 ONNX) | ~330 MB | `models/face/models/buffalo_l/` | InsightFace |
+
+```bash
+# Download all models (run once after pip install)
+python3 -c "
+from ultralytics import YOLO
+from insightface.app import FaceAnalysis
+import os
+
+# YOLO
+os.makedirs('models/yolo', exist_ok=True)
+m = YOLO('yolo11n.pt')
+m.export(format='onnx', imgsz=416, simplify=True, dynamic=False)
+import shutil; shutil.move('yolo11n.pt','models/yolo/'); shutil.move('yolo11n.onnx','models/yolo/')
+
+# InsightFace buffalo_l
+os.makedirs('models/face/models', exist_ok=True)
+app = FaceAnalysis(name='buffalo_l', root='models/face', providers=['CPUExecutionProvider'])
+app.prepare(ctx_id=-1, det_size=(640,640))
+print('All models downloaded.')
+"
 ```
 
 ## Gate Line Configuration
