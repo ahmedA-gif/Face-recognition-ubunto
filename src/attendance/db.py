@@ -68,9 +68,21 @@ class AttendanceDB:
         work_hours: Optional[float],
         confidence: float,
         camera_id: str,
+        clear_checkout: bool = False,
     ) -> None:
+        """Upsert a daily attendance row.
+
+        ``clear_checkout=True`` forces ``check_out_time`` back to NULL (used on
+        same-day re-entry after a prior checkout). Otherwise NULL check_out
+        keeps the existing value via COALESCE.
+        """
+        if clear_checkout:
+            checkout_sql = "NULL"
+        else:
+            checkout_sql = "COALESCE(excluded.check_out_time, attendance_logs.check_out_time)"
+
         self._conn.execute(
-            """
+            f"""
             INSERT INTO attendance_logs
                 (date, person_id, person_name, check_in_time, check_out_time,
                  status, work_hours, confidence, camera_id, updated_at)
@@ -78,7 +90,7 @@ class AttendanceDB:
             ON CONFLICT(date, person_id) DO UPDATE SET
                 person_name     = excluded.person_name,
                 check_in_time   = COALESCE(excluded.check_in_time, attendance_logs.check_in_time),
-                check_out_time  = COALESCE(excluded.check_out_time, attendance_logs.check_out_time),
+                check_out_time  = {checkout_sql},
                 status          = excluded.status,
                 work_hours      = excluded.work_hours,
                 confidence      = excluded.confidence,

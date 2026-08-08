@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Deque, Dict, List, Optional, Tuple
 
 from src.events.store import Event
 
@@ -22,9 +22,11 @@ class SpatialTemporalReasoning:
     """Applies contextual rules on top of raw line-crossing events.
 
     - Time-of-day windows: while the boundary is still uncalibrated,
-      morning crossings are biased toward Check-In, evening toward Check-Out.
-    - U-turn / loitering filter: a track crossing back within ``uturn_sec``
-      invalidates both crossings (both events are deleted).
+      morning crossings are biased toward Check-In, evening toward Check-Out
+      (OPT-IN via ``window_bias``).
+    - U-turn / loitering filter: a person crossing back within ``uturn_sec``
+      invalidates both crossings (both events are deleted). Keyed by person
+      identity so ByteTrack fragment IDs still catch the bounce.
     - Anti-tailgating alert: two accepted crossings of different people in
       near-identical time are flagged.
     - Guest fallback: raw ``Unknown`` / ``ID:#`` labels get persistent
@@ -47,7 +49,8 @@ class SpatialTemporalReasoning:
         self.window_bias = bool(window_bias)
         self.enabled = enabled
 
-        self._track_events: Dict[int, deque] = {}   # track_id -> accepted events
+        # person identity -> recent accepted events (u-turn + tailgate)
+        self._person_events: Dict[str, Deque[Event]] = {}
         self._guest_map: Dict[int, str] = {}
         self._guest_counter = 0
         self.alerts: List[str] = []
@@ -64,27 +67,27 @@ class SpatialTemporalReasoning:
         if not self.enabled:
             return [Verdict(e, "accept", e.direction) for e in events]
 
-        now = time.time()
         verdicts: List[Verdict] = []
         for e in events:
             self._ensure_person(e)
+            person_key = e.person or f"track:{e.track_id}"
 
             action, direction, note = "accept", e.direction, ""
             void_id = 0
 
-            # ── U-turn / loitering filter ────────────────────────────────
-            prev = self._track_events.get(e.track_id)
+            # ── U-turn / loitering filter (person-keyed) ────────────────
+            prev = self._person_events.get(person_key)
             if prev:
                 for p in prev:
-                    if p.direction and p.direction != e.direction and abs(self._ts(p) - self._ts(e)) < self.uturn_sec:
-                        action, note, void_id = "reject", "u-turn/loitering", p.id
+                    if (
+                        p.direction
+                        and p.direction == e.direction
+                        and abs(self._ts(p) - self._ts(e)) < self.uturn_sec
+                    ):
+                        action, note, void_id = "reject", "u-turn/duplicate", p.id
                         break
 
             # ── Time-of-day bias (OPT-IN; off by default) ────────────────
-            # Can only override the direction while the boundary is
-            # uncalibrated. Default OFF: geometry-derived direction (the
-            # configured seed line) is treated as ground truth, so an
-            # evening "entry" stays an entry and always produces a check-in.
             if (
                 action == "accept"
                 and self.window_bias
@@ -102,16 +105,23 @@ class SpatialTemporalReasoning:
                 e.direction = direction
                 q = prev if prev is not None else deque(maxlen=4)
                 q.append(e)
-                self._track_events[e.track_id] = q
+                self._person_events[person_key] = q
                 # ── anti-tailgating ─────────────────────────────────────
-                for tid2, q2 in self._track_events.items():
-                    if tid2 == e.track_id:
+                for other_key, q2 in self._person_events.items():
+                    if other_key == person_key:
                         continue
                     for p in q2:
                         if abs(self._ts(p) - self._ts(e)) < self.tailgate_sec and p.person != e.person:
                             self.alerts.append(
                                 f"TAILGATE {p.person} + {e.person} @ {e.time}"
                             )
+            elif action == "reject" and void_id and prev is not None:
+                # Drop the voided prior event from the history so a later
+                # legitimate crossing is not chained against it.
+                self._person_events[person_key] = deque(
+                    (p for p in prev if p.id != void_id),
+                    maxlen=4,
+                )
         return verdicts
 
     # ── internals ──────────────────────────────────────────────────────────────

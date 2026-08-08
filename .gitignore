@@ -1,5 +1,11 @@
 # Databases
 data/db/*.db
+data/db/*.db-shm
+data/db/*.db-wal
+data/db/*.faiss
+
+# Face gallery images (personal data)
+data/faces_gallery/
 
 # Model weights (download separately)
 models/yolo/*.onnx
@@ -31,3 +37,6 @@ data/output_*.mp4
 # Temp
 /tmp/
 *.tmp
+This
+plan.md
+threshold

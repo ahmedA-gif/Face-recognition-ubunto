@@ -1,0 +1,15 @@
+[Unit]
+Description=Face Recognition Attendance (24/7)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__PROJECT_DIR__
+ExecStart=__PROJECT_DIR__/scripts/run_attendance.sh
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

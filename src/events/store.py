@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -17,6 +17,7 @@ _EVENT_COLUMNS = (
     "camera_id",
     "confidence",
     "snapshot_path",
+    "event_id",
 )
 
 
@@ -31,6 +32,10 @@ class Event:
     camera_id: str = "cam_01"
     confidence: float = 0.0
     snapshot_path: str = ""
+    # Extensions for the polygon Door Intelligence Engine + Redis publisher.
+    global_id: str = ""          # identity_fusion global_person_id
+    fsm_path: List[str] = field(default_factory=list)  # e.g. ["OUTSIDE","DOOR","INSIDE"]
+    event_id: str = ""           # UUID; dedup key for the Redis consumer
 
 
 def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
@@ -59,23 +64,32 @@ class EventsStore:
                 camera_id TEXT,
                 confidence REAL,
                 snapshot_path TEXT,
+                event_id TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        # Migrate pre-existing databases created without the event_id column.
+        try:
+            self._conn.execute("ALTER TABLE events ADD COLUMN event_id TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists (fresh schema)
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_events_id_desc ON events(id DESC)"
         )
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_events_date_person ON events(date, person)"
         )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id)"
+        )
         self._conn.commit()
 
     def insert(self, event: Event) -> int:
         cur = self._conn.execute(
             """
-            INSERT INTO events(date, time, person, direction, track_id, camera_id, confidence, snapshot_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO events(date, time, person, direction, track_id, camera_id, confidence, snapshot_path, event_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event.date,
@@ -86,6 +100,7 @@ class EventsStore:
                 event.camera_id,
                 event.confidence,
                 event.snapshot_path,
+                event.event_id or None,
             ),
         )
         self._conn.commit()
@@ -104,9 +119,27 @@ class EventsStore:
         self._conn.commit()
         return cur.rowcount > 0
 
+    def update_person(self, event_id: int, person: str) -> bool:
+        cur = self._conn.execute(
+            "UPDATE events SET person = ? WHERE id = ?",
+            (person, event_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
     def get(self, event_id: int) -> Optional[Dict[str, Any]]:
         row = self._conn.execute(
             f"SELECT {', '.join(_EVENT_COLUMNS)} FROM events WHERE id = ?",
+            (event_id,),
+        ).fetchone()
+        return _row_to_dict(row) if row is not None else None
+
+    def get_by_event_id(self, event_id: str) -> Optional[Dict[str, Any]]:
+        """Look up a persisted event by its unique UUID (Redis dedup key)."""
+        if not event_id:
+            return None
+        row = self._conn.execute(
+            f"SELECT {', '.join(_EVENT_COLUMNS)} FROM events WHERE event_id = ? LIMIT 1",
             (event_id,),
         ).fetchone()
         return _row_to_dict(row) if row is not None else None
@@ -152,6 +185,18 @@ class EventsStore:
 
     def count(self) -> int:
         return int(self._conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()["n"])
+
+    def direction_counts(self, date: Optional[str] = None) -> Dict[str, int]:
+        if date:
+            rows = self._conn.execute(
+                "SELECT direction, COUNT(*) AS n FROM events WHERE date = ? GROUP BY direction",
+                (date,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT direction, COUNT(*) AS n FROM events GROUP BY direction"
+            ).fetchall()
+        return {r["direction"]: int(r["n"]) for r in rows}
 
     def close(self) -> None:
         if self._conn is not None:

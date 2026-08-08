@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 import cv2
 
@@ -11,16 +11,19 @@ from src.attendance.db import AttendanceDB
 from src.attendance.manager import AttendanceManager
 from src.capture.stream import CameraStream
 from src.detection.person_yolo import PersonDetector
+from src.events.door_intelligence import DoorIntelligenceEngine
 from src.events.dynamic_boundary import DynamicBoundaryEngine
 from src.events.entry_exit import EntryExitEngine
-from src.events.store import EventsStore
+from src.events.redis_publisher import EventPublisher
+from src.events.store import Event, EventsStore
 from src.overlay.draw import OverlayRenderer
 from src.reasoning.spatial_temporal import SpatialTemporalReasoning
 from src.recognition.face_engine import FaceEngine
 from src.recognition.gallery import FaceGallery
-from src.tracking.bytetrack import ByteTracker
+from src.tracking.bytetrack import ByteTracker, Track
 from src.tracking.identity_fusion import IdentityFusionEngine
 from src.utils.assign import attach_faces_to_tracks
+from src.utils.config import load_zones
 
 
 @dataclass
@@ -84,12 +87,49 @@ def _build_components(cfg: dict[str, Any]):
         entry_direction=ee["entry_direction"],
         debounce_sec=ee["debounce_sec"],
         min_track_frames=ee["min_track_frames"],
-        hysteresis_px=ee.get("hysteresis_px", 12.0),
+        hysteresis_px=ee.get("hysteresis_px", 14.0),
+        use_foot_point=bool(ee.get("use_foot_point", True)),
+        segment_pad=float(ee.get("segment_pad", 0.12)),
+        require_committed_zone=bool(ee.get("require_committed_zone", True)),
     )
     overlay = OverlayRenderer(
         pulse_frames=ov["pulse_frames"],
         hud=ov["hud"],
         show_boundary=bool(ov.get("show_boundary", False)),
+    )
+
+    # ── Door Intelligence Engine (polygon FSM) — primary when calibrated ──
+    di = cfg.get("door_intelligence", {})
+    using_door_engine = bool(di.get("enabled", False))
+    if using_door_engine:
+        zones = dict(di.get("zones") or {}) or load_zones(
+            di.get("zones_path", "config/zones.yaml"), di.get("camera_id")
+        )
+        if not zones:
+            print(
+                "[DoorIntelligence] enabled but no calibrated polygons found "
+                "(config/zones.yaml) — falling back to the line engine."
+            )
+            using_door_engine = False
+        else:
+            entry_exit = DoorIntelligenceEngine(
+                zones=zones,
+                camera_id=di.get("camera_id", "cam_01"),
+                probe=di.get("probe", "foot"),
+                min_track_frames=di.get("min_track_frames", 5),
+                min_dwell_door_sec=di.get("min_dwell_door_sec", 0.15),
+                min_inside_frames=di.get("min_inside_frames", 3),
+                min_outside_frames=di.get("min_outside_frames", 3),
+                lock_after_event=di.get("lock_after_event", True),
+                motion_toward_inside_dot=di.get("motion_toward_inside_dot", 0.25),
+                motion_outward_dot=di.get("motion_outward_dot", 0.25),
+                peek_max_inside_sec=di.get("peek_max_inside_sec", 1.5),
+                uturn_max_door_sec=di.get("uturn_max_door_sec", 3.0),
+                min_event_confidence=di.get("min_event_confidence", 0.70),
+                purge_after_sec=di.get("purge_after_sec", 10.0),
+            )
+    print(
+        f"[DoorIntelligence] {'ACTIVE (polygon FSM)' if using_door_engine else 'disabled (line engine)'}"
     )
 
     # ── new intelligence modules (config-gated) ────────────────────────────
@@ -142,15 +182,26 @@ def _build_components(cfg: dict[str, Any]):
         )
     print(f"[Attendance] {'active → ' + at.get('db_path', 'data/db/attendance.db') if attendance else 'disabled'}")
 
+    # ── Redis Streams live publisher (graceful JSONL fallback) ────────────
+    rd = cfg.get("redis", {})
+    publisher = EventPublisher(
+        url=rd.get("url", "redis://localhost:6379/0"),
+        stream=rd.get("stream", "attendance:events"),
+        maxlen=rd.get("maxlen", 10000),
+        enabled=bool(rd.get("enabled", True)),
+        fallback_path=rd.get("fallback_path", "data/db/events_redis_fallback.jsonl"),
+    )
+
     return (detector, tracker, face_engine, gallery, store, entry_exit, overlay,
-            fusion, boundary, reasoner, att_db, attendance)
+            fusion, boundary, reasoner, att_db, attendance,
+            publisher, using_door_engine)
 
 
-def _fix_counts(entry_exit: EntryExitEngine) -> None:
+def _fix_counts(engine: EntryExitEngine) -> None:
     """Keep the IN/OUT/present counters consistent after reasoner adjustments."""
-    entry_exit.counts["entry"] = max(0, entry_exit.counts.get("entry", 0))
-    entry_exit.counts["exit"] = max(0, entry_exit.counts.get("exit", 0))
-    entry_exit.counts["present"] = entry_exit.counts["entry"] - entry_exit.counts["exit"]
+    engine.counts["entry"] = max(0, engine.counts.get("entry", 0))
+    engine.counts["exit"] = max(0, engine.counts.get("exit", 0))
+    engine.counts["present"] = engine.counts["entry"] - engine.counts["exit"]
 
 
 def run_pipeline(
@@ -167,8 +218,9 @@ def run_pipeline(
     pipe = cfg["pipeline"]
 
     source = normalize_source(source_override if source_override is not None else cam_cfg["source"])
-    (detector, tracker, face_engine, gallery, store, entry_exit, overlay,
-     fusion, boundary, reasoner, att_db, attendance) = _build_components(cfg)
+    (detector, tracker, face_engine, gallery, store, event_engine, overlay,
+     fusion, boundary, reasoner, att_db, attendance,
+     publisher, using_door_engine) = _build_components(cfg)
 
     if skip_frames is None:
         skip_frames = int(pipe.get("skip_frames", 1))
@@ -185,6 +237,79 @@ def run_pipeline(
     last_boundary_progress = -1
     last_fused = -1
     output_file = Path(output_path) if output_path else None
+
+    # Fast people cross the line before face recognition runs. Their events
+    # are held in pending_events for a short grace period; if face
+    # recognition names the track within that window, the event's person is
+    # corrected before it reaches the attendance/CSV pipeline.
+    NAME_GRACE_SEC = 2.0
+    pending_events: Dict[int, Event] = {}
+    pending_deadline: Dict[int, float] = {}
+
+    def _handle_event(e: Event) -> None:
+        """Run reasoning → attendance → publish (Redis) for a single (finalised) event."""
+        verdicts = reasoner.verify(
+            [e],
+            boundary.confidence if boundary else 0.0,
+            boundary.learned if boundary else False,
+        )
+        v = verdicts[0]
+        if v.action == "reject":
+            store.delete(v.event.id)
+            event_engine.counts[v.event.direction] = event_engine.counts.get(v.event.direction, 0) - 1
+            if v.void_previous_id:
+                prev = store.get(v.void_previous_id)
+                store.delete(v.void_previous_id)
+                if prev is not None:
+                    prev_dir = prev.get("direction")
+                    if prev_dir:
+                        event_engine.counts[prev_dir] = event_engine.counts.get(prev_dir, 0) - 1
+                print(
+                    f"[REASON] rejected {v.event.person} {v.event.direction} "
+                    f"({v.note}) voided event #{v.void_previous_id}"
+                )
+            else:
+                print(f"[REASON] rejected {v.event.person} {v.event.direction} ({v.note})")
+            _fix_counts(event_engine)
+            return
+        if v.action == "flip":
+            old_dir = v.event.direction
+            store.update_direction(v.event.id, v.direction)
+            event_engine.counts[old_dir] = event_engine.counts.get(old_dir, 0) - 1
+            event_engine.counts[v.direction] = event_engine.counts.get(v.direction, 0) + 1
+            v.event.direction = v.direction
+            print(f"[REASON] flipped {v.event.person} {old_dir}→{v.direction} ({v.note})")
+        _fix_counts(event_engine)
+        accepted = [v.event]
+        outcomes = attendance.process_events(accepted) if attendance is not None else []
+        outcome_by_key = {(o["person"], o["time"]): o for o in outcomes}
+        e2 = v.event
+        print(f"[EVENT] {e2.date} {e2.time} | {e2.person} | {e2.direction}")
+        publisher.publish(e2)
+        for alert in reasoner.alerts:
+            print(f"[ALERT] {alert}")
+
+    def _is_placeholder(name: str) -> bool:
+        return not name or name.startswith(("Guest#", "Unknown", "ID:"))
+
+    def _resolve_pending(tracks: List[Track]) -> None:
+        """Flush pending events whose track got a real face name; expire others."""
+        now_t = time.time()
+        for tid, e in list(pending_events.items()):
+            t = next((t for t in tracks if t.track_id == tid), None)
+            if t is None:
+                t = next((t for t in tracks if t.meta.get("global_id") == e.person), None)
+            name = t.person_name if t is not None else ""
+            if t is not None and not _is_placeholder(name):
+                e.person = name
+                store.update_person(e.id, name)
+                pending_events.pop(tid)
+                _handle_event(e)
+                overlay.pulse_boundary()
+            elif t is None or now_t >= pending_deadline.get(tid, 0.0):
+                pending_events.pop(tid)
+                _handle_event(e)
+                overlay.pulse_boundary()
 
     try:
         with CameraStream(
@@ -206,6 +331,16 @@ def run_pipeline(
                 if max_frames is not None and frames_processed > max_frames:
                     break
 
+                if using_door_engine and not overlay._zones_px:
+                    # Draw the calibrated polygons once frame size is known.
+                    fh, fw = frame.shape[:2]
+                    overlay.set_zones(
+                        {
+                            name: [(int(x * fw), int(y * fh)) for x, y in poly]
+                            for name, poly in event_engine.zones.items()
+                        }
+                    )
+
                 run_det = (frames_processed - 1) % max(1, skip_frames) == 0
                 run_face = (frames_processed - 1) % max(1, face_every_n) == 0
 
@@ -220,6 +355,9 @@ def run_pipeline(
 
                 if run_face:
                     last_faces = face_engine.detect_and_embed(frame, min_face_px=cfg["models"]["min_face_px"])
+                # Always re-match last known faces to current tracks (even on
+                # non-face frames) so person_name is populated before entry/exit.
+                if last_faces:
                     attach_faces_to_tracks(tracks, last_faces, gallery.match)
                     for f in last_faces:
                         if f.name != "Unknown":
@@ -230,15 +368,16 @@ def run_pipeline(
                     fusion.update(tracks)
 
                 # ── Auto boundary: feed trajectories, apply when learned ──
-                if boundary is not None:
+                # (skipped entirely while the polygon Door engine is active)
+                if boundary is not None and not using_door_engine:
                     fh, fw = frame.shape[:2]
                     for t in tracks:
                         gid = t.meta.get("global_id") if fusion is not None else None
                         if gid:
                             boundary.feed(gid, t.centroid[0] / fw, t.centroid[1] / fh)
                     if boundary.learned and not boundary_applied:
-                        entry_exit.set_line(boundary.line_norm)
-                        entry_exit.entry_direction = boundary.entry_direction
+                        event_engine.set_line(boundary.line_norm)
+                        event_engine.entry_direction = boundary.entry_direction
                         overlay.set_boundary(boundary.line_norm, label="BOUNDARY")
                         boundary_applied = True
                         if att_db is not None:
@@ -256,57 +395,25 @@ def run_pipeline(
                     if n != last_boundary_progress and n > 0 and n % 10 == 0:
                         print(f"[Boundary] learning… {n}/{total} trajectory vectors")
                         last_boundary_progress = n
-                elif not boundary_applied and overlay.show_boundary:
+                elif not boundary_applied and overlay.show_boundary and not using_door_engine:
                     # Auto-learning disabled → draw the static configured line
-                    overlay.set_boundary(entry_exit.line_norm, label="BOUNDARY")
+                    overlay.set_boundary(event_engine.line_norm, label="BOUNDARY")
                     boundary_applied = True
 
-                # ── Line crossing events → reasoning → attendance ─────────
-                events = entry_exit.update(tracks, frame.shape, store)
+                # ── Entry/exit events → reasoning → attendance → Redis ────
+                events = event_engine.update(tracks, frame.shape, store)
                 if events:
                     total_events += len(events)
-                    verdicts = reasoner.verify(
-                        events,
-                        boundary.confidence if boundary else 0.0,
-                        boundary.learned if boundary else False,
-                    )
-                    accepted = []
-                    for v in verdicts:
-                        if v.action == "reject":
-                            store.delete(v.event.id)
-                            entry_exit.counts[v.event.direction] = entry_exit.counts.get(v.event.direction, 0) - 1
-                            if v.void_previous_id:
-                                # Look up the voided event *before* deleting so counts stay correct
-                                prev = store.get(v.void_previous_id)
-                                store.delete(v.void_previous_id)
-                                if prev is not None:
-                                    prev_dir = prev.get("direction")
-                                    if prev_dir:
-                                        entry_exit.counts[prev_dir] = entry_exit.counts.get(prev_dir, 0) - 1
-                                print(
-                                    f"[REASON] rejected {v.event.person} {v.event.direction} "
-                                    f"({v.note}) voided event #{v.void_previous_id}"
-                                )
-                            else:
-                                print(f"[REASON] rejected {v.event.person} {v.event.direction} ({v.note})")
-                        elif v.action == "flip":
-                            old_dir = v.event.direction
-                            store.update_direction(v.event.id, v.direction)
-                            entry_exit.counts[old_dir] = entry_exit.counts.get(old_dir, 0) - 1
-                            entry_exit.counts[v.direction] = entry_exit.counts.get(v.direction, 0) + 1
-                            # Keep the in-memory event object consistent with the DB
-                            v.event.direction = v.direction
-                            print(f"[REASON] flipped {v.event.person} {old_dir}→{v.direction} ({v.note})")
-                            accepted.append(v.event)
+                    now_t = time.time()
+                    for e in events:
+                        if _is_placeholder(e.person):
+                            pending_events[e.track_id] = e
+                            pending_deadline[e.track_id] = now_t + NAME_GRACE_SEC
                         else:
-                            accepted.append(v.event)
-                    _fix_counts(entry_exit)
-                    for e in accepted:
-                        print(f"[EVENT] {e.date} {e.time} | {e.person} | {e.direction}")
-                    if attendance is not None and accepted:
-                        attendance.process_events(accepted)
-                    for alert in reasoner.alerts:
-                        print(f"[ALERT] {alert}")
+                            _handle_event(e)
+                            overlay.pulse_boundary()
+
+                _resolve_pending(tracks)
 
                 if fusion is not None:
                     stats = fusion.stats()
@@ -318,7 +425,7 @@ def run_pipeline(
                         )
                         last_fused = total_fused
 
-                vis = overlay.draw(frame, tracks, last_faces, entry_exit.counts)
+                vis = overlay.draw(frame, tracks, last_faces, event_engine.counts)
 
                 if output_file is not None and writer is None:
                     fps = float(stream.cap.get(cv2.CAP_PROP_FPS)) if stream.cap is not None else 0.0
@@ -336,6 +443,11 @@ def run_pipeline(
                     if key in (27, ord("q")):
                         break
     finally:
+        for tid, e in list(pending_events.items()):
+            pending_events.pop(tid)
+            _handle_event(e)
+            overlay.pulse_boundary()
+        publisher.close()
         if writer is not None:
             writer.release()
         if display:

@@ -1,0 +1,95 @@
+# Video test config — boundary line placed at y=0.92 (where feet actually walk in test_video.mp4)
+camera:
+  source: "data/test_video.mp4"
+  buffer_size: 1
+  width: 1280
+  height: 720
+
+models:
+  yolo_weights: "models/yolo/yolo11n.pt"
+  yolo_onnx: "models/yolo/yolo11n.onnx"
+  yolo_imgsz: 416
+  yolo_conf: 0.45
+  yolo_iou: 0.5
+  person_class_id: 0
+  face_root: "models/face"
+  face_pack: "buffalo_s"
+  face_det_size: [320, 320]
+  face_match_threshold: 0.35
+  min_face_px: 1
+  tracker: "bytetrack"
+  tracker_config: "models/tracker/bytetrack.yaml"
+
+pipeline:
+  device: "cpu"
+  skip_frames: 2
+  face_every_n: 3
+  max_tracks: 50
+
+entry_exit:
+  line:
+    x1: 0.10
+    y1: 0.92
+    x2: 0.90
+    y2: 0.92
+  entry_direction: "B_to_A"
+  debounce_sec: 1.5
+  min_track_frames: 5
+  hysteresis_px: 14
+  use_foot_point: true
+  segment_pad: 0.12
+  require_committed_zone: true
+
+identity_fusion:
+  enabled: true
+  max_stitch_dist_px: 60
+  max_stitch_time_sec: 2.0
+  embedding_match_threshold: 0.42
+  max_pool_embeddings: 8
+
+auto_boundary:
+  enabled: false
+  min_tracks_for_learning: 40
+  adaptation_rate: 0.05
+  smoothing: true
+
+reasoning:
+  enabled: true
+  window_bias: false
+  morning_window: ["07:00", "11:00"]
+  evening_window: ["16:00", "20:00"]
+  uturn_sec: 3.0
+  tailgate_sec: 2.0
+
+attendance:
+  enabled: true
+  db_path: "data/db/attendance.db"
+  shift_start: "09:00"
+  shift_end: "17:00"
+  late_threshold_mins: 15
+  early_exit_mins: 15
+  debounce_minutes: 2.0
+
+events:
+  db_path: "/tmp/opencode/test_events.db"
+  faces_db_path: "data/db/faces.db"
+  snapshots_dir: "data/snapshots"
+  save_snapshots: true
+
+redis:
+  enabled: true
+  url: "redis://localhost:6379/0"
+  stream: "attendance:events"
+  maxlen: 10000
+  fallback_path: "data/db/events_redis_fallback.jsonl"
+
+overlay:
+  show_person_box: true
+  show_face_box: true
+  show_labels: true
+  show_boundary: true
+  pulse_frames: 10
+  hud: true
+
+gallery:
+  images_dir: "data/faces_gallery"

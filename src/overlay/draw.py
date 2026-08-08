@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -17,6 +17,13 @@ _AMBER   = (0, 160, 255)     # unknown face
 _RED     = (60, 60, 255)     # exit
 _WHITE   = (255, 255, 255)
 _GREY80  = (40, 40, 40)      # panels
+
+# Door Intelligence region colours (semi-transparent fills)
+_ZONE_COLORS = {
+    "OUTSIDE": (70, 60, 200),   # BGR-ish
+    "DOOR":    (0, 200, 255),
+    "INSIDE":  (80, 220, 40),
+}
 
 _FONTB = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -102,13 +109,32 @@ class OverlayRenderer:
         self.boundary_label: str = "BOUNDARY"
         self._pulses: Dict[int, int] = defaultdict(int)
         self._frame_count = 0
+        self._boundary_pulse: int = 0
+        self._boundary_pulse_frames: int = 20  # frames to show red pulse
+        self._zones_px: Dict[str, np.ndarray] = {}  # region -> pixel polygon
+        self._zone_pulses: Dict[str, int] = defaultdict(int)  # region -> remaining frames
 
     def set_boundary(self, line_norm: Dict[str, float], label: str = "BOUNDARY") -> None:
         self.boundary_line = dict(line_norm)
         self.boundary_label = label
 
+    def set_zones(self, zones_px: Dict[str, List[Tuple[int, int]]]) -> None:
+        """Provide Door Intelligence polygons in pixel coordinates for drawing."""
+        self._zones_px = {
+            name: np.asarray(poly, dtype=np.int32).reshape(-1, 1, 2)
+            for name, poly in zones_px.items()
+        }
+
     def note_new_track(self, track_id: int) -> None:
         self._pulses[track_id] = self.pulse_frames
+
+    def pulse_boundary(self) -> None:
+        """Trigger a red pulse on the boundary line (called on entry/exit event)."""
+        self._boundary_pulse = self._boundary_pulse_frames
+
+    def pulse_zone(self, zone: str, frames: int = 20) -> None:
+        """Trigger a flash pulse on a specific zone polygon (OUTSIDE / DOOR / INSIDE)."""
+        self._zone_pulses[zone] = frames
 
     def draw(
         self,
@@ -120,6 +146,9 @@ class OverlayRenderer:
         out = frame.copy()
         h, w = out.shape[:2]
         self._frame_count += 1
+
+        if self._zones_px:
+            self._draw_zones(out, w, h)
 
         for track in tracks:
             self._draw_track(out, track)
@@ -146,6 +175,9 @@ class OverlayRenderer:
         _draw_corner_box(canvas, (x1, y1), (x2, y2), color, thickness=2, corner_len=18)
 
         label = track.person_name or f"ID:{track.track_id:03d}"
+        fsm_state = (track.meta.get("fsm_state") if track.meta else None) or ""
+        if fsm_state:
+            label = f"{label} · {fsm_state}"
         tw, th = cv2.getTextSize(label, _FONTB, 0.5, 1)[0]
         ly = max(24, y1 - 10)
         _alpha_rect(canvas, (x1 - 2, ly - th - 6), (x1 + tw + 8, ly + 4), _GREY80, alpha=0.8, radius=3)
@@ -183,15 +215,41 @@ class OverlayRenderer:
         _neon_text(canvas, "Person · Face · Events", (12, 18), 0.5, _WHITE, glow=False)
         _neon_text(canvas, _tt("%H:%M:%S"), (w - 92, 18), 0.5, _WHITE, glow=False)
 
+    def _draw_zones(self, canvas: np.ndarray, w: int, h: int) -> None:
+        """Draw OUTSIDE / DOOR / INSIDE polygons as translucent filled regions."""
+        for name, poly in self._zones_px.items():
+            color = _ZONE_COLORS.get(name, _GREY80)
+            pulse_left = self._zone_pulses.get(name, 0)
+            alpha = 0.22 + (0.35 * pulse_left / 20) if pulse_left > 0 else 0.22
+            if pulse_left > 0:
+                self._zone_pulses[name] = pulse_left - 1
+            overlay = canvas.copy()
+            cv2.fillPoly(overlay, [poly], color)
+            cv2.addWeighted(overlay, alpha, canvas, 1 - alpha, 0, canvas)
+            cv2.polylines(canvas, [poly], True, color, 2, cv2.LINE_AA)
+            cx = int(poly[:, 0, 0].mean())
+            cy = int(poly[:, 0, 1].mean())
+            _neon_text(canvas, name, (cx - 10, cy + 4), 0.5, color, glow=True)
+
     def _draw_boundary(self, canvas: np.ndarray, w: int, h: int) -> None:
         line = self.boundary_line
         if line is None:
             return
         p1 = (int(line["x1"] * w), int(line["y1"] * h))
         p2 = (int(line["x2"] * w), int(line["y2"] * h))
-        cv2.line(canvas, p1, p2, _GREEN, 2, cv2.LINE_AA)
+        
+        # Red pulse on crossing event
+        if self._boundary_pulse > 0:
+            color = _RED
+            self._boundary_pulse -= 1
+            label = "CROSSING!"
+        else:
+            color = _GREEN
+            label = self.boundary_label
+        
+        cv2.line(canvas, p1, p2, color, 3, cv2.LINE_AA)
         cv2.line(canvas, p1, p2, _CYAN, 1, cv2.LINE_AA)
         # direction arrow at centre
         cx, cy = (p1[0] + p2[0]) // 2, (p1[1] + p2[1]) // 2
         cv2.arrowedLine(canvas, (cx, cy), (cx + 26, cy), _CYAN, 1, cv2.LINE_AA, tipLength=0.5)
-        _neon_text(canvas, self.boundary_label, (cx + 30, cy + 5), 0.4, _CYAN, glow=False)
+        _neon_text(canvas, label, (cx + 30, cy + 5), 0.4, color, glow=True)

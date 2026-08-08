@@ -25,9 +25,9 @@ models:
   person_class_id: 0          # COCO person only
 
   face_root: "models/face"
-  face_pack: "buffalo_l"      # ArcFace R50 — high-accuracy (already downloaded)
-  face_det_size: [640, 640]
-  face_match_threshold: 0.42  # cosine similarity (tune up for stricter matching)
+  face_pack: "buffalo_s"      # ArcFace R34 — fast for door cams
+  face_det_size: [320, 320]
+  face_match_threshold: 0.35  # cosine similarity (lower = more lenient matching)
   min_face_px: 1
 
   tracker: "bytetrack"
@@ -35,21 +35,56 @@ models:
 
 pipeline:
   device: "cpu"
-  skip_frames: 2              # run heavy detect every N frames
+  skip_frames: 2              # detect every 2 frames (fast enough now)
   face_every_n: 3
   max_tracks: 50
 
-# Virtual door line (normalized 0–1 of frame width/height)
+# ── Door Intelligence Engine (polygon FSM) ────────────────────────────────────
+# PRIMARY entry/exit engine (replaces the virtual line).
+door_intelligence:
+  enabled: true
+  camera_id: "office_entrance"
+  probe: "foot"                 # foot = bbox bottom-center (recommended)
+  zones_path: "config/zones.yaml"  # region polygons (normalized 0-1)
+  min_track_frames: 5           # warm-up frames before a track can fire
+  min_dwell_door_sec: 0.15      # min time in the corridor before crossing counts
+  min_inside_frames: 3          # stable frames inside before ENTRY fires
+  min_outside_frames: 3         # stable frames outside before EXIT fires
+  lock_after_event: false       # allow same person to enter/exit freely
+  motion_toward_inside_dot: 0.25   # Kalman velocity · inward normal ≥ this → inward
+  motion_outward_dot: 0.25         # ≤ -this → outward
+  peek_max_inside_sec: 1.5      # peek-out-and-back no-event window
+  uturn_max_door_sec: 3.0       # loiter in corridor past this → back to OUTSIDE
+  min_event_confidence: 0.70    # events below this confidence are dropped
+  purge_after_sec: 10.0         # drop stale tracks from FSM memory
+
+# ── Real-time event stream (replaces CSV on the hot path) ─────────────────────
+redis:
+  enabled: true
+  url: "redis://localhost:6379/0"
+  stream: "attendance:events"
+  maxlen: 10000
+  fallback_path: "data/db/events_redis_fallback.jsonl"   # used if Redis is down
+
+# Virtual door SEGMENT (normalized 0–1 of frame width/height)
+# Legacy line engine — FALLBACK only while door_intelligence.enabled: false.
+# Camera is INSIDE looking at the door. Door threshold at y=0.55 (middle of frame).
+# People enter by walking from outside (through door) INTO room (toward camera).
+# Crossing is only counted when the person's FEET project onto this segment —
+# walking past left/right of the door does NOT fire entry/exit.
 entry_exit:
   line:
-    x1: 0.25
-    y1: 0.82
-    x2: 0.75
-    y2: 0.82
-  entry_direction: "B_to_A"   # B→A = entry (from outside through gate into room)
-  debounce_sec: 1.5
-  min_track_frames: 8
-  hysteresis_px: 12           # jitter-suppression band around the line (px)
+    x1: 0.20    # left edge of door opening
+    y1: 0.55    # door threshold (middle of frame, where ground meets door)
+    x2: 0.80    # right edge of door opening
+    y2: 0.55    # same height → horizontal line
+  entry_direction: "B_to_A"   # B→A = entry (outside above → inside below)
+  debounce_sec: 1.5           # min seconds between events for same identity
+  min_track_frames: 5         # warm-up frames before a crossing can fire
+  hysteresis_px: 14           # must go this many px past the line to commit side
+  use_foot_point: true        # use bbox bottom-center (feet), not body centroid
+  segment_pad: 0.12           # allow slight overshoot past door edges (fraction)
+  require_committed_zone: true  # previous side must be deep before reverse fires
 
 # ── Identity Fusion & Re-ID ───────────────────────────────────────────────────
 # Resolves "same person, different track IDs" into persistent global ids.

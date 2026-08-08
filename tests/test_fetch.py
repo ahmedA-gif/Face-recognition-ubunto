@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -484,6 +485,17 @@ class TestCameraStream:
 # ── micro-benchmarks (guardrails, not strict) ─────────────────────────────────
 
 
+def _budget(base: float) -> float:
+    """Scale a wall-clock budget by current load so busy hosts don't flake.
+
+    The guardrail still catches real regressions (an order-of-magnitude
+    slowdown blows through even a load-scaled budget).
+    """
+    cpus = os.cpu_count() or 1
+    factor = max(1.0, os.getloadavg()[0] / cpus)
+    return base * factor
+
+
 class TestFetchPerformance:
     def test_events_recent_is_fast(self, events_store: EventsStore):
         for i in range(200):
@@ -501,7 +513,7 @@ class TestFetchPerformance:
             events_store.recent(50)
         elapsed = time.perf_counter() - t0
         # 50 fetches of 50 rows should be well under 250ms on any modern machine
-        assert elapsed < 0.5, f"recent() too slow: {elapsed:.3f}s"
+        assert elapsed < _budget(0.5), f"recent() too slow: {elapsed:.3f}s"
 
     def test_gallery_match_is_fast(self, gallery: FaceGallery):
         items = [(f"P{i}", _unit(128, seed=i + 1)) for i in range(100)]
@@ -511,7 +523,7 @@ class TestFetchPerformance:
         for _ in range(500):
             gallery.match(q)
         elapsed = time.perf_counter() - t0
-        assert elapsed < 0.5, f"match() too slow: {elapsed:.3f}s"
+        assert elapsed < _budget(0.5), f"match() too slow: {elapsed:.3f}s"
 
     def test_incremental_add_faster_than_rebuild(self, tmp_dir: Path):
         g_inc = FaceGallery(str(tmp_dir / "inc.db"), backend="numpy")

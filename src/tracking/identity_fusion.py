@@ -108,13 +108,21 @@ class IdentityFusionEngine:
         identity = self.track_identity.get(tid)
         if identity is None:
             identity = self._identity_for_new_track(t, emb, name)
-        elif emb is not None:
-            # Late face evidence corrects provisional identities (e.g. stitches)
-            best_id, best_sim = self._best_pool_match(emb)
-            if best_id is not None and best_sim >= self.embedding_match_threshold:
-                identity = best_id
-            elif name is not None and name != self.identity_name.get(identity):
+        else:
+            # A gallery-recognised name is the strongest signal: it always wins
+            # over any provisional Guest / pool identity. Otherwise a person's
+            # own embedding pooled under Guest# would re-capture them forever.
+            if name is not None and name != self.identity_name.get(identity, identity):
+                if identity.startswith("Guest#"):
+                    self._merge_pool(identity, name)
+                self.identity_name.setdefault(name, name)
                 identity = name
+            elif emb is not None and name is None:
+                # No gallery name: fall back to embedding Re-ID so fragmented
+                # tracks of the same unknown person still stitch together.
+                best_id, best_sim = self._best_pool_match(emb)
+                if best_id is not None and best_sim >= self.embedding_match_threshold:
+                    identity = best_id
 
         if emb is not None:
             self._update_pool(identity, emb)
@@ -129,19 +137,19 @@ class IdentityFusionEngine:
         emb: Optional[np.ndarray],
         name: Optional[str],
     ) -> str:
-        # Fix 1 — face embedding Re-ID
+        # Gallery-known name is the strongest evidence.
+        if name is not None:
+            self.identity_name.setdefault(name, name)
+            return name
+
+        # Face embedding Re-ID for unknown persons (stitch fragmented tracks).
         if emb is not None:
             best_id, best_sim = self._best_pool_match(emb)
             if best_id is not None and best_sim >= self.embedding_match_threshold:
                 self.face_merge_count += 1
                 return best_id
 
-        # Gallery-known name is strong evidence
-        if name is not None:
-            self.identity_name.setdefault(name, name)
-            return name
-
-        # Fix 2 — spatial-temporal stitching
+        # Spatial-temporal stitching
         stitched = self._try_stitch(t)
         if stitched is not None:
             return stitched
@@ -168,6 +176,28 @@ class IdentityFusionEngine:
         pool.append(emb.copy())
         if len(pool) > self.max_pool_embeddings:
             pool.pop(0)
+
+    def _merge_pool(self, src: str, dst: str) -> None:
+        """Re-parent a Guest identity's embeddings onto a gallery name.
+
+        After a Guest is upgraded to a real name, its embedding pool is moved
+        to the name's pool so future Re-ID returns the real name (not the old
+        Guest). The ``src → dst`` mapping is kept so legacy Guest references
+        still resolve to the corrected identity.
+        """
+        src_pool = self.pools.pop(src, None)
+        self.identity_name[src] = dst
+        if not src_pool:
+            return
+        dst_pool = self.pools.setdefault(dst, [])
+        for e in src_pool:
+            if dst_pool:
+                sims = [float(x @ e) for x in dst_pool]
+                if max(sims) > 0.85:  # already captured
+                    continue
+            dst_pool.append(e)
+        if len(dst_pool) > self.max_pool_embeddings:
+            self.pools[dst] = dst_pool[-self.max_pool_embeddings:]
 
     def _try_stitch(self, t: Track) -> Optional[str]:
         """Stitch to the best-matching expired track.

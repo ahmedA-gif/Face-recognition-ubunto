@@ -1,0 +1,30 @@
+# Door Intelligence regions (NORMALIZED 0-1 coords) — calibrated from camera frame
+# Camera is INSIDE looking OUT through the door.
+# Region priority: DOOR (decision band) > INSIDE > OUTSIDE
+camera_1:
+  zones:
+    outside:
+      # Visible outdoor area through the door opening (motorcycle/wall)
+      - [0.33, 0.14]
+      - [0.70, 0.14]
+      - [0.70, 0.66]
+      - [0.33, 0.66]
+    door_corridor:
+      # Threshold band at the bottom of the door opening (ground crossing)
+      - [0.29, 0.66]
+      - [0.73, 0.66]
+      - [0.73, 0.82]
+      - [0.29, 0.82]
+    inside:
+      # Room interior — concave polygon wrapping around the door opening
+      # Covers: left wall, right wall, bottom (near camera), top (above door)
+      - [0.00, 0.00]
+      - [0.29, 0.00]
+      - [0.29, 0.14]
+      - [0.29, 0.66]
+      - [0.73, 0.66]
+      - [0.73, 0.14]
+      - [0.73, 0.00]
+      - [1.00, 0.00]
+      - [1.00, 1.00]
+      - [0.00, 1.00]
