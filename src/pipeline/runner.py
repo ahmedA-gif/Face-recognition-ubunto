@@ -22,7 +22,7 @@ from src.recognition.face_engine import FaceEngine
 from src.recognition.gallery import FaceGallery
 from src.tracking.bytetrack import ByteTracker, Track
 from src.tracking.identity_fusion import IdentityFusionEngine
-from src.utils.assign import attach_faces_to_tracks
+from src.utils.assign import attach_faces_to_tracks, appearance_signature
 from src.utils.config import load_zones
 
 
@@ -139,11 +139,15 @@ def _build_components(cfg: dict[str, Any]):
             max_stitch_dist_px=if_in.get("max_stitch_dist_px", 60),
             max_stitch_time_sec=if_in.get("max_stitch_time_sec", 2.0),
             embedding_match_threshold=if_in.get("embedding_match_threshold", m["face_match_threshold"]),
+            appearance_match_threshold=if_in.get("appearance_match_threshold", 0.85),
             max_pool_embeddings=if_in.get("max_pool_embeddings", 8),
+            state_path=if_in.get("state_path", "data/db/identity_state.json"),
         )
     else:
         fusion = None
-    print(f"[IdentityFusion] {'active' if fusion else 'disabled'}")
+    print(f"[IdentityFusion] {'active' if fusion else 'disabled'}"
+          f" (face_reid={if_in.get('embedding_match_threshold', m['face_match_threshold'])}, "
+          f"appearance_reid={if_in.get('appearance_match_threshold', 0.85)})")
 
     ab = cfg.get("auto_boundary", {})
     if ab.get("enabled", True):
@@ -233,6 +237,8 @@ def run_pipeline(
     last_dets = []
     last_faces = []
     seen_ids: set[int] = set()
+    _printed_tracks: set = set()
+    _dbg_seen_zone: dict = {}
     boundary_applied = False
     last_boundary_progress = -1
     last_fused = -1
@@ -284,7 +290,12 @@ def run_pipeline(
         outcomes = attendance.process_events(accepted) if attendance is not None else []
         outcome_by_key = {(o["person"], o["time"]): o for o in outcomes}
         e2 = v.event
-        print(f"[EVENT] {e2.date} {e2.time} | {e2.person} | {e2.direction}")
+        evidence = f" {e2.fsm_path}" if getattr(e2, "fsm_path", None) else ""
+        face_note = f" | face={e2.person}" if e2.person and not _is_placeholder(e2.person) else ""
+        print(
+            f"[EVENT] {e2.date} {e2.time} | {e2.person} | {e2.direction}{evidence}"
+            f" | conf={e2.confidence:.2f}{face_note}"
+        )
         publisher.publish(e2)
         for alert in reasoner.alerts:
             print(f"[ALERT] {alert}")
@@ -353,6 +364,29 @@ def run_pipeline(
                         overlay.note_new_track(t.track_id)
                         seen_ids.add(t.track_id)
 
+                if tracks:
+                    for t in tracks:
+                        x1, y1, x2, y2 = t.xyxy
+                        fx = t.centroid[0] / frame.shape[1]
+                        fy = (y2 + (y1 - y2) * 0.5) / frame.shape[0]
+                        zone = "?"
+                        try:
+                            zone = event_engine._zone_for((x1 + (x2 - x1) * 0.5, y2)) if using_door_engine else "line"
+                        except Exception:
+                            pass
+                        fsm = t.meta.get("fsm_state", "-")
+                        prev_zone = getattr(t, "prev_side", None)
+                        is_new = t.track_id in _dbg_seen_zone and _dbg_seen_zone[t.track_id] != zone
+                        _dbg_seen_zone[t.track_id] = zone
+                        is_first = t.track_id not in _printed_tracks
+                        if is_new or is_first:
+                            _printed_tracks.add(t.track_id)
+                            print(
+                                f"[Track] id={t.track_id} {'NEW' if is_first else 'move'} "
+                                f"person={t.person_name!r} conf={t.conf:.2f} "
+                                f"feet=({fx:.2f},{fy:.2f}) zone={zone} fsm={fsm}"
+                            )
+
                 if run_face:
                     last_faces = face_engine.detect_and_embed(frame, min_face_px=cfg["models"]["min_face_px"])
                 # Always re-match last known faces to current tracks (even on
@@ -361,10 +395,13 @@ def run_pipeline(
                     attach_faces_to_tracks(tracks, last_faces, gallery.match)
                     for f in last_faces:
                         if f.name != "Unknown":
-                            print(f"[Face] {f.name}  score={f.match_score:.2f}")
+                            print(f"[Face] {f.name}  score={f.match_score:.2f}  det={f.det_conf:.2f}" if hasattr(f, 'det_conf') else f"[Face] {f.name}  score={f.match_score:.2f}")
 
                 # ── Identity Fusion & Re-ID ───────────────────────────────
                 if fusion is not None:
+                    for t in tracks:
+                        if t.meta.get("appearance") is None:
+                            t.meta["appearance"] = appearance_signature(frame, t.xyxy)
                     fusion.update(tracks)
 
                 # ── Auto boundary: feed trajectories, apply when learned ──
@@ -447,6 +484,8 @@ def run_pipeline(
             pending_events.pop(tid)
             _handle_event(e)
             overlay.pulse_boundary()
+        if fusion is not None:
+            fusion.close()
         publisher.close()
         if writer is not None:
             writer.release()

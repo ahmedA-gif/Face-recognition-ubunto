@@ -19,6 +19,38 @@ def face_inside_person(face: np.ndarray, person: np.ndarray, margin: float = 0.0
     return (x1 - margin * w) <= fx <= (x2 + margin * w) and (y1 - margin * h) <= fy <= (y2 + margin * h)
 
 
+def appearance_signature(frame: np.ndarray, xyxy, n_bins: int = 16) -> np.ndarray | None:
+    """Compact body-colour signature for appearance-based re-identification.
+
+    Crops the person bbox from ``frame``, builds a normalized HSV histogram
+    (H+S jointly), L2-normalised. Used as a FALLBACK when no face embedding is
+    available so a returning person (e.g. back turned) still keeps Guest#001.
+    Returns None on invalid crop so callers skip matching.
+    """
+    try:
+        import cv2
+    except ImportError:
+        return None
+    if frame is None or xyxy is None:
+        return None
+    h, w = frame.shape[:2]
+    x1 = max(0, int(xyxy[0])); y1 = max(0, int(xyxy[1]))
+    x2 = min(w, int(xyxy[2])); y2 = min(h, int(xyxy[3]))
+    if x2 - x1 < 8 or y2 - y1 < 8:
+        return None
+    crop = frame[y1:y2, x1:x2]
+    try:
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    except cv2.error:
+        return None
+    hist = cv2.calcHist([hsv], [0, 1], None, [n_bins, n_bins], [0, 180, 0, 256])
+    hist = hist.ravel().astype(np.float32)
+    norm = float(np.linalg.norm(hist))
+    if norm < 1e-6:
+        return None
+    return (hist / norm).astype(np.float32)
+
+
 def attach_faces_to_tracks(
     tracks: List[Track],
     faces: List[FaceHit],

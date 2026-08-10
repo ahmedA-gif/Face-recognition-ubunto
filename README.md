@@ -273,6 +273,14 @@ Face-recognition-ubunto/
     └── snapshots/                   # Event face crops
 ```
 
+## Known Issues
+
+| Issue | Status |
+|-------|--------|
+| **Appearance Re-ID false merge** — HSV body-histogram re-ID can merge two different people wearing similar-coloured clothes (test showed cosine 0.81–0.85 for distinct persons). To be fixed: use a stricter threshold or a dedicated person-ReID model. | ⚠️ To fix later |
+| **Guest counter burns IDs on fleeting tracks** — fixed: `_expire()` no longer calls `_new_guest()` for tracks that vanish before identity resolution. | ✅ Fixed |
+| **Output buffered when run via systemd** — pipeline logs only streamed to journald after `-u` (unbuffered) flag was added to `run_attendance.sh`. | ✅ Fixed |
+
 ## Testing
 
 ```bash

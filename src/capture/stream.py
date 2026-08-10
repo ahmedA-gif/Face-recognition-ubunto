@@ -46,7 +46,7 @@ class CameraStream:
         *,
         reconnect: bool = True,
         reconnect_delay_sec: float = 1.0,
-        max_reconnect_attempts: int = 5,
+        max_reconnect_attempts: int = 1000000,
         drop_stale: bool = True,
     ) -> None:
         self.source = source

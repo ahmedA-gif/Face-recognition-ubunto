@@ -33,8 +33,16 @@ if command -v ip >/dev/null 2>&1; then
   done
   if [ -z "$CAM_IF" ]; then
     echo "  ERROR: no wired interface with a live cable (carrier=1) found."
-    echo "         Is the camera's Ethernet adapter plugged in and the camera powered?"
+    echo "         carrier=0 means NO physical Ethernet link (cable/power), not a bad password."
+    echo "         Fix: bash scripts/fix_camera_link.sh"
+    echo "         Checklist: camera powered, RJ45 into USB-dongle + camera, try another cable."
     ip link show
+    # Show USB dongle status if present but dead link
+    for iface in $(ip -o link show | awk -F': ' '{print $2}'); do
+      case "$iface" in enx*|usb*)
+        echo "  Found USB-Eth $iface but carrier=$(cat /sys/class/net/$iface/carrier 2>/dev/null || echo 0) — cable/camera not linked."
+      ;; esac
+    done
     exit 1
   fi
   echo "  Interface: $CAM_IF (carrier=1)"

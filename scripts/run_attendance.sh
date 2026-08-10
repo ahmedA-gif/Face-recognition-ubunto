@@ -11,4 +11,4 @@ cd "$(dirname "$0")/.."
 
 ./scripts/start_go2rtc.sh
 
-exec sudo -u rahmat .venv/bin/python3 scripts/run_video.py --no-display
+exec sudo -u rahmat .venv/bin/python3 -u scripts/run_video.py --no-display

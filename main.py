@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -61,19 +62,27 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     cfg = load_settings(args.config)
-    result = run_pipeline(
-        cfg,
-        source_override=args.source,
-        output_path=args.output,
-        display=not args.no_display,
-        max_frames=args.max_frames,
-        skip_frames=args.skip_frames,
-        face_every_n=args.face_every_n,
-    )
-    print(
-        f"Done. frames={result.frames_processed}, events={result.events_count}, "
-        f"source={result.source}, output={result.output_path or 'n/a'}"
-    )
+    while True:
+        try:
+            result = run_pipeline(
+                cfg,
+                source_override=args.source,
+                output_path=args.output,
+                display=not args.no_display,
+                max_frames=args.max_frames,
+                skip_frames=args.skip_frames,
+                face_every_n=args.face_every_n,
+            )
+        except KeyboardInterrupt:
+            break
+        print(
+            f"Done. frames={result.frames_processed}, events={result.events_count}, "
+            f"source={result.source}, output={result.output_path or 'n/a'}"
+        )
+        if args.max_frames is not None:
+            break
+        print("[Main] stream ended — restarting in 5s (24/7 mode) ...")
+        time.sleep(5)
 
 
 if __name__ == "__main__":

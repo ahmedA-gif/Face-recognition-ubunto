@@ -1,0 +1,15 @@
+[Unit]
+Description=Attendance Redis Stream Worker (24/7)
+After=redis-server.service
+Wants=redis-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/rahmat/Face-recognition-ubunto
+ExecStart=/home/rahmat/Face-recognition-ubunto/.venv/bin/python3 -u scripts/attendance_worker.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

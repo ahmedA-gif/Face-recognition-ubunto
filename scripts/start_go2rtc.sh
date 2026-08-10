@@ -55,7 +55,7 @@ fi
 echo "Using camera interface: $CAM_IF (carrier=1)"
 
 # Move 192.168.2.100/24 onto the live camera interface (remove stale copies)
-for iface in $(ip -o addr show | awk -F': ' '/192\.168\.2\.100/{print $2}'); do
+for iface in $(ip -o -family inet addr show 2>/dev/null | awk '/192\.168\.2\.100(\/24)?/{print $2}'); do
   if [ "$iface" != "$CAM_IF" ]; then
     echo "Removing stale 192.168.2.100/24 from $iface (no cable link)..."
     sudo ip addr del 192.168.2.100/24 dev "$iface" 2>/dev/null || true

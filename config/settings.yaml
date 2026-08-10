@@ -92,8 +92,10 @@ identity_fusion:
   enabled: true
   max_stitch_dist_px: 60          # spatial window to stitch expired tracks (px)
   max_stitch_time_sec: 2.0        # temporal window to stitch expired tracks (s)
-  embedding_match_threshold: 0.42 # ArcFace cosine threshold for pool Re-ID
+  embedding_match_threshold: 0.42 # ArcFace cosine threshold for face Re-ID
+  appearance_match_threshold: 0.85  # HSV body-histogram cosine threshold for no-face Re-ID
   max_pool_embeddings: 8          # embeddings kept per identity (lighting views)
+  state_path: "data/db/identity_state.json"  # persisted Guest counter + Re-ID pools
 
 # ── Auto-Adjusting Virtual Boundary ───────────────────────────────────────────
 # OPT-IN. Learns a new line from trajectory flow and replaces the manual

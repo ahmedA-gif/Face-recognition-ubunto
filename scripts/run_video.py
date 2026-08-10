@@ -190,32 +190,39 @@ def main() -> None:
     if not args.no_display:
         print(f"  {_DIM}Controls: Q or ESC to quit the preview window.{_RESET}\n")
 
+    # Live sources (RTSP/webcam) run forever with auto-restart; video files run once.
+    is_live = is_rtsp or is_cam
     t0 = time.perf_counter()
-    try:
-        result = run_pipeline(
-            cfg,
-            source_override=source,
-            output_path=args.output,
-            display=not args.no_display,
-            max_frames=args.max_frames,
-            skip_frames=args.skip_frames,
-            face_every_n=args.face_every_n,
-        )
-    except KeyboardInterrupt:
-        print(f"\n{_Y}  Interrupted by user.{_RESET}")
-        sys.exit(0)
+    while True:
+        try:
+            result = run_pipeline(
+                cfg,
+                source_override=source,
+                output_path=args.output,
+                display=not args.no_display,
+                max_frames=args.max_frames,
+                skip_frames=args.skip_frames,
+                face_every_n=args.face_every_n,
+            )
+            elapsed = time.perf_counter() - t0
+            fps_avg = result.frames_processed / elapsed if elapsed > 0 else 0
 
-    elapsed = time.perf_counter() - t0
-    fps_avg = result.frames_processed / elapsed if elapsed > 0 else 0
-
-    print(f"\n{'─'*52}")
-    print(f"{_G}{_BOLD}  Pipeline finished{_RESET}")
-    print(f"  Frames processed : {_W}{result.frames_processed}{_RESET}")
-    print(f"  Elapsed time     : {_W}{elapsed:.1f}s{_RESET}  ({_W}{fps_avg:.1f} fps{_RESET})")
-    print(f"  Events triggered : {_W}{result.events_count}{_RESET}")
-    if result.output_path:
-        print(f"  Saved output     : {_G}{result.output_path}{_RESET}")
-    print()
+            print(f"\n{'─'*52}")
+            print(f"{_G}{_BOLD}  Pipeline finished{_RESET}")
+            print(f"  Frames processed : {_W}{result.frames_processed}{_RESET}")
+            print(f"  Elapsed time     : {_W}{elapsed:.1f}s{_RESET}  ({_W}{fps_avg:.1f} fps{_RESET})")
+            print(f"  Events triggered : {_W}{result.events_count}{_RESET}")
+            if result.output_path:
+                print(f"  Saved output     : {_G}{result.output_path}{_RESET}")
+            print()
+            if not is_live or args.max_frames is not None:
+                break
+            print(f"{_Y}  Stream ended — reconnecting in 5s (24/7 mode)…{_RESET}\n")
+            time.sleep(5)
+            t0 = time.perf_counter()
+        except KeyboardInterrupt:
+            print(f"\n{_Y}  Interrupted by user.{_RESET}")
+            sys.exit(0)
 
 
 if __name__ == "__main__":
