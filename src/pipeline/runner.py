@@ -20,6 +20,7 @@ from src.overlay.draw import OverlayRenderer
 from src.reasoning.spatial_temporal import SpatialTemporalReasoning
 from src.recognition.face_engine import FaceEngine
 from src.recognition.gallery import FaceGallery
+from src.recognition.person_reid import PersonReID
 from src.tracking.bytetrack import ByteTracker, Track
 from src.tracking.identity_fusion import IdentityFusionEngine
 from src.utils.assign import attach_faces_to_tracks, appearance_signature
@@ -139,7 +140,7 @@ def _build_components(cfg: dict[str, Any]):
             max_stitch_dist_px=if_in.get("max_stitch_dist_px", 60),
             max_stitch_time_sec=if_in.get("max_stitch_time_sec", 2.0),
             embedding_match_threshold=if_in.get("embedding_match_threshold", m["face_match_threshold"]),
-            appearance_match_threshold=if_in.get("appearance_match_threshold", 0.85),
+            appearance_match_threshold=if_in.get("appearance_match_threshold", 0.92),
             max_pool_embeddings=if_in.get("max_pool_embeddings", 8),
             state_path=if_in.get("state_path", "data/db/identity_state.json"),
         )
@@ -147,7 +148,7 @@ def _build_components(cfg: dict[str, Any]):
         fusion = None
     print(f"[IdentityFusion] {'active' if fusion else 'disabled'}"
           f" (face_reid={if_in.get('embedding_match_threshold', m['face_match_threshold'])}, "
-          f"appearance_reid={if_in.get('appearance_match_threshold', 0.85)})")
+          f"appearance_reid={if_in.get('appearance_match_threshold', 0.92)})")
 
     ab = cfg.get("auto_boundary", {})
     if ab.get("enabled", True):
@@ -225,6 +226,12 @@ def run_pipeline(
     (detector, tracker, face_engine, gallery, store, event_engine, overlay,
      fusion, boundary, reasoner, att_db, attendance,
      publisher, using_door_engine) = _build_components(cfg)
+
+    # Optional person-ReID model (scripted torch model path may be provided in
+    # either pipeline cfg or models cfg). If not configured or torch missing,
+    # PersonReID remains disabled and code falls back to HSV histogram.
+    pr_weights = cfg.get("identity_fusion", {}).get("person_reid_weights") or cfg.get("models", {}).get("person_reid_weights")
+    person_reid = PersonReID(weights_path=pr_weights, device=pipe.get("device", "cpu"))
 
     if skip_frames is None:
         skip_frames = int(pipe.get("skip_frames", 1))
@@ -402,6 +409,9 @@ def run_pipeline(
                     for t in tracks:
                         if t.meta.get("appearance") is None:
                             t.meta["appearance"] = appearance_signature(frame, t.xyxy)
+                        # Extract person-ReID embedding when available (optional).
+                        if person_reid and getattr(person_reid, "enabled", False):
+                            t.meta["person_reid"] = person_reid.extract(frame, t.xyxy)
                     fusion.update(tracks)
 
                 # ── Auto boundary: feed trajectories, apply when learned ──
