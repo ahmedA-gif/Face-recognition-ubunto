@@ -20,6 +20,7 @@ from src.overlay.draw import OverlayRenderer
 from src.reasoning.spatial_temporal import SpatialTemporalReasoning
 from src.recognition.face_engine import FaceEngine
 from src.recognition.gallery import FaceGallery
+from src.recognition.person_reid import PersonReID
 from src.tracking.bytetrack import ByteTracker, Track
 from src.tracking.identity_fusion import IdentityFusionEngine
 from src.utils.assign import attach_faces_to_tracks, appearance_signature
@@ -226,6 +227,12 @@ def run_pipeline(
      fusion, boundary, reasoner, att_db, attendance,
      publisher, using_door_engine) = _build_components(cfg)
 
+    # Optional person-ReID model (scripted torch model path may be provided in
+    # either pipeline cfg or models cfg). If not configured or torch missing,
+    # PersonReID remains disabled and code falls back to HSV histogram.
+    pr_weights = cfg.get("identity_fusion", {}).get("person_reid_weights") or cfg.get("models", {}).get("person_reid_weights")
+    person_reid = PersonReID(weights_path=pr_weights, device=pipe.get("device", "cpu"))
+
     if skip_frames is None:
         skip_frames = int(pipe.get("skip_frames", 1))
     if face_every_n is None:
@@ -402,6 +409,9 @@ def run_pipeline(
                     for t in tracks:
                         if t.meta.get("appearance") is None:
                             t.meta["appearance"] = appearance_signature(frame, t.xyxy)
+                        # Extract person-ReID embedding when available (optional).
+                        if person_reid and getattr(person_reid, "enabled", False):
+                            t.meta["person_reid"] = person_reid.extract(frame, t.xyxy)
                     fusion.update(tracks)
 
                 # ── Auto boundary: feed trajectories, apply when learned ──
