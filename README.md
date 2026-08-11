@@ -277,7 +277,7 @@ Face-recognition-ubunto/
 
 | Issue | Status |
 |-------|--------|
-| **Appearance Re-ID false merge** — HSV body-histogram re-ID can merge two different people wearing similar-coloured clothes (test showed cosine 0.81–0.85 for distinct persons). To be fixed: use a stricter threshold or a dedicated person-ReID model. | ⚠️ To fix later |
+| **Appearance Re-ID false merge** — Fixed: appearance Re-ID now uses a stricter default cosine threshold (0.92) and requires short temporal persistence before accepting appearance-only matches to reduce false merges on similar clothing. Face-embedding Re-ID remains primary when available. | ✅ Fixed |
 | **Guest counter burns IDs on fleeting tracks** — fixed: `_expire()` no longer calls `_new_guest()` for tracks that vanish before identity resolution. | ✅ Fixed |
 | **Output buffered when run via systemd** — pipeline logs only streamed to journald after `-u` (unbuffered) flag was added to `run_attendance.sh`. | ✅ Fixed |
 

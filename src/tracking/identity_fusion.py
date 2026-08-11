@@ -50,7 +50,8 @@ class IdentityFusionEngine:
         max_stitch_dist_px: float = 60.0,
         max_stitch_time_sec: float = 2.0,
         embedding_match_threshold: float = 0.42,
-        appearance_match_threshold: float = 0.85,
+        appearance_match_threshold: float = 0.92,
+        min_appearance_frames: int = 3,
         max_pool_embeddings: int = 8,
         max_expired: int = 300,
         state_path: Optional[str] = None,
@@ -59,6 +60,7 @@ class IdentityFusionEngine:
         self.max_stitch_time_sec = max_stitch_time_sec
         self.embedding_match_threshold = embedding_match_threshold
         self.appearance_match_threshold = appearance_match_threshold
+        self.min_appearance_frames = min_appearance_frames
         self.max_pool_embeddings = max_pool_embeddings
         self.max_expired = max_expired
         self.state_path = state_path
@@ -193,7 +195,15 @@ class IdentityFusionEngine:
                     identity = best_id
             elif app is not None and name is None:
                 best_id, best_sim = self._best_appearance_match(app)
-                if best_id is not None and best_sim >= self.appearance_match_threshold:
+                hist_len = len(self._history.get(tid, []))
+                # Require a short-lived track (few frames) to persist before trusting
+                # appearance-only Re-ID, and use a stricter cosine threshold to avoid
+                # false merges on similar clothing.
+                if (
+                    best_id is not None
+                    and best_sim >= self.appearance_match_threshold
+                    and hist_len >= self.min_appearance_frames
+                ):
                     identity = best_id
 
         if emb is not None:
@@ -227,7 +237,14 @@ class IdentityFusionEngine:
         # Appearance Re-ID when the face is hidden (back turned / far away).
         if app is not None:
             best_id, best_sim = self._best_appearance_match(app)
-            if best_id is not None and best_sim >= self.appearance_match_threshold:
+            hist_len = len(self._history.get(t.track_id, []))
+            # Only accept appearance-only Re-ID when the new track has persisted
+            # for a few frames to reduce false merges from single-frame noise.
+            if (
+                best_id is not None
+                and best_sim >= self.appearance_match_threshold
+                and hist_len >= self.min_appearance_frames
+            ):
                 self.appearance_merge_count += 1
                 return best_id
 

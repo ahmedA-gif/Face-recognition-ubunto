@@ -139,7 +139,7 @@ def _build_components(cfg: dict[str, Any]):
             max_stitch_dist_px=if_in.get("max_stitch_dist_px", 60),
             max_stitch_time_sec=if_in.get("max_stitch_time_sec", 2.0),
             embedding_match_threshold=if_in.get("embedding_match_threshold", m["face_match_threshold"]),
-            appearance_match_threshold=if_in.get("appearance_match_threshold", 0.85),
+            appearance_match_threshold=if_in.get("appearance_match_threshold", 0.92),
             max_pool_embeddings=if_in.get("max_pool_embeddings", 8),
             state_path=if_in.get("state_path", "data/db/identity_state.json"),
         )
@@ -147,7 +147,7 @@ def _build_components(cfg: dict[str, Any]):
         fusion = None
     print(f"[IdentityFusion] {'active' if fusion else 'disabled'}"
           f" (face_reid={if_in.get('embedding_match_threshold', m['face_match_threshold'])}, "
-          f"appearance_reid={if_in.get('appearance_match_threshold', 0.85)})")
+          f"appearance_reid={if_in.get('appearance_match_threshold', 0.92)})")
 
     ab = cfg.get("auto_boundary", {})
     if ab.get("enabled", True):
