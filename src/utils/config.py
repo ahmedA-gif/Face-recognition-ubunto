@@ -33,13 +33,14 @@ def load_settings(path: str | Path | None = None) -> dict[str, Any]:
             if not p.is_absolute():
                 data["models"][key] = str(ROOT / p)
     for section, keys in (
-        ("models", ("face_root",)),
+        ("models", ("face_root", "person_reid_weights")),
         ("events", ("db_path", "faces_db_path", "snapshots_dir")),
         ("attendance", ("db_path",)),
         ("gallery", ("images_dir",)),
+        ("identity_fusion", ("person_reid_weights",)),
     ):
         for key in keys:
-            if key in data.get(section, {}):
+            if key in data.get(section, {}) and data[section][key]:
                 p = Path(data[section][key])
                 if not p.is_absolute():
                     data[section][key] = str(ROOT / p)

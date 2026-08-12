@@ -29,10 +29,18 @@ class IdentityFusionEngine:
     Fix 1 — Face-embedding Re-ID: a new track whose face embedding matches an
             existing identity's embedding pool inherits that identity (and all
             its state, history and attendance status).
-    Fix 2 — Appearance Re-ID: when no face is visible, a normalized HSV body
-            histogram is matched against each identity's appearance pool, so a
-            returning person (back turned, too far, mask) keeps the SAME Guest
-            id instead of getting a brand-new one.
+    Fix 2 — Person-ReID (clothing-invariant): when a person-reID model is
+            configured, a new track whose ``meta["person_reid"]`` embedding
+            matches an identity's ``reid_pools`` inherits that identity — the
+            same person wearing DIFFERENT clothes still matches, unlike the HSV
+            histogram.
+    Fix 2b — Appearance Re-ID: when no face is visible AND no reID embedding is
+            available, a normalized HSV body histogram is matched against each
+            identity's appearance pool (strict threshold), so a returning person
+            (back turned, too far, mask) keeps the SAME Guest id instead of
+            getting a brand-new one.
+            Signal priority: gallery name > face embedding > person-ReID > HSV.
+    
     Fix 3 — Spatial-temporal stitching: a new track appearing within
             ``max_stitch_dist_px`` px and ``max_stitch_time_sec`` s of where an
             older track expired inherits the expired track's identity.
@@ -51,6 +59,7 @@ class IdentityFusionEngine:
         max_stitch_time_sec: float = 2.0,
         embedding_match_threshold: float = 0.42,
         appearance_match_threshold: float = 0.85,
+        reid_match_threshold: float = 0.82,
         max_pool_embeddings: int = 8,
         max_expired: int = 300,
         state_path: Optional[str] = None,
@@ -59,6 +68,7 @@ class IdentityFusionEngine:
         self.max_stitch_time_sec = max_stitch_time_sec
         self.embedding_match_threshold = embedding_match_threshold
         self.appearance_match_threshold = appearance_match_threshold
+        self.reid_match_threshold = reid_match_threshold
         self.max_pool_embeddings = max_pool_embeddings
         self.max_expired = max_expired
         self.state_path = state_path
@@ -66,6 +76,7 @@ class IdentityFusionEngine:
         self.track_identity: Dict[int, str] = {}            # track_id -> global_person_id
         self.identity_name: Dict[str, str] = {}             # global_id -> display name
         self.pools: Dict[str, List[np.ndarray]] = {}        # global_id -> [embeddings]
+        self.reid_pools: Dict[str, List[np.ndarray]] = {}   # global_id -> [person-reid embeddings]
         self.appearance_pools: Dict[str, List[np.ndarray]] = {}  # global_id -> [appearance sigs]
         self._history: Dict[int, deque] = {}                # track_id -> [(x, y, t)]
         self._expired: List[_ExpiredTrack] = []
@@ -73,6 +84,7 @@ class IdentityFusionEngine:
 
         self.stitch_count = 0
         self.face_merge_count = 0
+        self.reid_merge_count = 0
         self.appearance_merge_count = 0
 
         self._load()
@@ -95,6 +107,10 @@ class IdentityFusionEngine:
                 str(gid): [np.asarray(a, dtype=np.float32) for a in sigs]
                 for gid, sigs in (data.get("appearance_pools") or {}).items()
             }
+            self.reid_pools = {
+                str(gid): [np.asarray(r, dtype=np.float32) for r in embs]
+                for gid, embs in (data.get("reid_pools") or {}).items()
+            }
             print(f"[IdentityFusion] restored {len(self.pools)} identity(s) "
                   f"from {self.state_path} (guest_counter={self._guest_counter})")
         except Exception as exc:  # noqa: BLE001
@@ -115,6 +131,10 @@ class IdentityFusionEngine:
                 "appearance_pools": {
                     gid: [a.tolist() for a in sigs]
                     for gid, sigs in self.appearance_pools.items()
+                },
+                "reid_pools": {
+                    gid: [r.tolist() for r in embs]
+                    for gid, embs in self.reid_pools.items()
                 },
             }
             tmp = self.state_path + ".tmp"
@@ -148,6 +168,7 @@ class IdentityFusionEngine:
         return {
             "stitches": self.stitch_count,
             "face_merges": self.face_merge_count,
+            "reid_merges": self.reid_merge_count,
             "appearance_merges": self.appearance_merge_count,
             "identities": len(self.pools),
             "guests": self._guest_counter,
@@ -169,12 +190,13 @@ class IdentityFusionEngine:
     def _resolve(self, t: Track) -> None:
         tid = t.track_id
         emb = t.meta.get("embedding")
+        reid = t.meta.get("person_reid")
         app = t.meta.get("appearance")
         name = t.person_name if t.person_name and t.person_name != "Unknown" else None
 
         identity = self.track_identity.get(tid)
         if identity is None:
-            identity = self._identity_for_new_track(t, emb, app, name)
+            identity = self._identity_for_new_track(t, emb, reid, app, name)
         else:
             # A gallery-recognised name is the strongest signal: it always wins
             # over any provisional Guest / pool identity. Otherwise a person's
@@ -182,6 +204,7 @@ class IdentityFusionEngine:
             if name is not None and name != self.identity_name.get(identity, identity):
                 if identity.startswith("Guest#"):
                     self._merge_pool(identity, name)
+                    self._merge_reid_pool(identity, name)
                     self._merge_appearance_pool(identity, name)
                 self.identity_name.setdefault(name, name)
                 identity = name
@@ -191,6 +214,11 @@ class IdentityFusionEngine:
                 best_id, best_sim = self._best_pool_match(emb)
                 if best_id is not None and best_sim >= self.embedding_match_threshold:
                     identity = best_id
+            elif reid is not None and name is None:
+                # Clothing-invariant person-ReID beats the HSV histogram.
+                best_id, best_sim = self._best_reid_match(reid)
+                if best_id is not None and best_sim >= self.reid_match_threshold:
+                    identity = best_id
             elif app is not None and name is None:
                 best_id, best_sim = self._best_appearance_match(app)
                 if best_id is not None and best_sim >= self.appearance_match_threshold:
@@ -198,6 +226,8 @@ class IdentityFusionEngine:
 
         if emb is not None:
             self._update_pool(identity, emb)
+        if reid is not None:
+            self._update_reid_pool(identity, reid)
         if app is not None:
             self._update_appearance_pool(identity, app)
 
@@ -209,6 +239,7 @@ class IdentityFusionEngine:
         self,
         t: Track,
         emb: Optional[np.ndarray],
+        reid: Optional[np.ndarray],
         app: Optional[np.ndarray],
         name: Optional[str],
     ) -> str:
@@ -224,7 +255,14 @@ class IdentityFusionEngine:
                 self.face_merge_count += 1
                 return best_id
 
-        # Appearance Re-ID when the face is hidden (back turned / far away).
+        # Person-ReID (clothing-invariant) when the face is not captured.
+        if reid is not None:
+            best_id, best_sim = self._best_reid_match(reid)
+            if best_id is not None and best_sim >= self.reid_match_threshold:
+                self.reid_merge_count += 1
+                return best_id
+
+        # Appearance Re-ID (HSV) — strict threshold, last-resort only.
         if app is not None:
             best_id, best_sim = self._best_appearance_match(app)
             if best_id is not None and best_sim >= self.appearance_match_threshold:
@@ -259,6 +297,16 @@ class IdentityFusionEngine:
                 best_sim, best_id = s, gid
         return best_id, best_sim
 
+    def _best_reid_match(self, sig: np.ndarray) -> Tuple[Optional[str], float]:
+        best_id, best_sim = None, 0.0
+        for gid, pool in self.reid_pools.items():
+            if not pool:
+                continue
+            s = float((np.asarray(pool) @ sig).max())  # cosine (L2-normalised)
+            if s > best_sim:
+                best_sim, best_id = s, gid
+        return best_id, best_sim
+
     def _update_pool(self, gid: str, emb: np.ndarray) -> None:
         pool = self.pools.setdefault(gid, [])
         if pool:
@@ -271,6 +319,16 @@ class IdentityFusionEngine:
 
     def _update_appearance_pool(self, gid: str, sig: np.ndarray) -> None:
         pool = self.appearance_pools.setdefault(gid, [])
+        if pool:
+            sims = [float(a @ sig) for a in pool]
+            if max(sims) > 0.90:  # near-identical view already captured
+                return
+        pool.append(sig.copy())
+        if len(pool) > self.max_pool_embeddings:
+            pool.pop(0)
+
+    def _update_reid_pool(self, gid: str, sig: np.ndarray) -> None:
+        pool = self.reid_pools.setdefault(gid, [])
         if pool:
             sims = [float(a @ sig) for a in pool]
             if max(sims) > 0.90:  # near-identical view already captured
@@ -314,6 +372,20 @@ class IdentityFusionEngine:
             dst_pool.append(a)
         if len(dst_pool) > self.max_pool_embeddings:
             self.appearance_pools[dst] = dst_pool[-self.max_pool_embeddings:]
+
+    def _merge_reid_pool(self, src: str, dst: str) -> None:
+        src_pool = self.reid_pools.pop(src, None)
+        if not src_pool:
+            return
+        dst_pool = self.reid_pools.setdefault(dst, [])
+        for a in src_pool:
+            if dst_pool:
+                sims = [float(x @ a) for x in dst_pool]
+                if max(sims) > 0.90:
+                    continue
+            dst_pool.append(a)
+        if len(dst_pool) > self.max_pool_embeddings:
+            self.reid_pools[dst] = dst_pool[-self.max_pool_embeddings:]
 
     def _try_stitch(self, t: Track) -> Optional[str]:
         """Stitch to the best-matching expired track.

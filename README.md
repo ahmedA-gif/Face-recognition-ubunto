@@ -1,6 +1,6 @@
 # Face Recognition Attendance System (Ubuntu)
 
-Real-time face recognition + person tracking attendance system with polygon-based door intelligence, Redis Streams event bus, and SQLite storage. Designed for a live Dahua CCTV camera on Ubuntu.
+Real-time face recognition + person tracking attendance system with polygon-based door intelligence, a geometry-based Category 1 event engine (9 events), hardware auto-detection, Redis Streams event bus, and SQLite storage. Designed for a live Dahua CCTV camera on Ubuntu.
 
 ## Architecture
 
@@ -11,15 +11,23 @@ CCTV Camera (Dahua 192.168.2.112)
 go2rtc (RTSP proxy, port 8554)
     │
     ▼
+Hardware Auto-Detection ─► Model Loader (hot-swap)
+(NVIDIA/Intel/AMD/Coral/CPU)
+    │
+    ▼
 YOLOv11n (person detection) ─► ByteTrack (multi-object tracking)
     │                                   │
     ▼                                   ▼
 InsightFace buffalo_s           Identity Fusion (Re-ID)
-(face detection + embed)        (stitches track fragments)
+(face detection + embed)        (face > person-ReID > HSV)
     │                                   │
     └───────────┬───────────────────────┘
                 ▼
-    Door Intelligence Engine (polygon FSM)
+  Category 1 Event Engine (9 geometry events)
+  ─ 5-layer entry/exit validation (≥98% accuracy)
+  ─ Zone engine (polygons, occupancy, intrusion)
+  ─ Rule engine (YAML configurable)
+  ─ Door Intelligence Engine (polygon FSM)
         │           │           │
         ▼           ▼           ▼
     SQLite     Redis Streams   Overlay
@@ -35,13 +43,21 @@ InsightFace buffalo_s           Identity Fusion (Re-ID)
 - **Person Detection**: YOLOv11n ONNX (CPU, ~416px, ~15ms/frame)
 - **Face Recognition**: InsightFace ArcFace (buffalo_s pack, 320x320 det)
 - **Multi-Object Tracking**: ByteTrack with identity fusion (Re-ID across track fragments)
+- **Category 1 Event Engine**: 9 geometry-based events (person/vehicle entered-exited, restricted-zone intrusion, line crossing, wrong direction, occupancy limit, zone entry/exit) — 99% deterministic
+- **5-Layer Entry/Exit Validation**: signed distance → 5-state FSM → trajectory validation → track continuity (occlusion + Re-ID) → deduplication (≥98% accuracy)
+- **Zone Engine**: polygon zones, occupancy counting, restricted-zone intrusion, loitering, object left-behind detection
+- **Rule Engine**: YAML-configurable AND/OR/NOT conditions, actions (log, notify, webhook, reject, tag), auto-reload
+- **Hardware Auto-Detection**: NVIDIA (TensorRT) / Intel iGPU (OpenVINO) / AMD (ROCm) / Coral TPU (TFLite) / CPU (ONNX) with automatic model selection
+- **Dynamic Optimizer**: auto-adjusts FPS, batch size and model based on CPU/GPU/memory/queue/motion
+- **Model Loader & Hot-Swap**: registry + framework-specific loaders, swap models without restart
+- **Person Re-ID (clothing-invariant)**: optional OSNet-style embeddings, signal priority `gallery name > face embedding > person-ReID > HSV`
 - **Polygon Door Intelligence**: Three-zone FSM (OUTSIDE / DOOR / INSIDE) with calibrated polygons — replaces the legacy virtual boundary line
 - **Redis Streams**: Real-time event bus (`attendance:events` stream) with JSONL fallback
 - **SQLite Storage**: WAL-mode event log with deduplication by event UUID
 - **Attendance Manager**: Auto check-in/check-out with Late/Early detection
 - **Live Overlay**: Bounding boxes, face labels, zone polygons, HUD
 - **Spatial-Temporal Reasoning**: U-turn/loitering detection, anti-tailgating alerts
-- **83 Unit Tests**: Door FSM, geometry, gallery, reasoning, attendance
+- **106 Unit Tests**: Door FSM, geometry, gallery, reasoning, attendance, category 1, Re-ID
 
 ## Quick Start
 
@@ -79,7 +95,12 @@ redis-cli ping
 ### Step 4: Download models
 
 ```bash
-# YOLO (person detection)
+# Recommended: auto-detect hardware and download matching models
+python3 scripts/download_models.py
+# or the shell version
+bash scripts/download_models.sh
+
+# Manual YOLO (person detection)
 mkdir -p models/yolo
 python3 -c "from ultralytics import YOLO; m=YOLO('yolo11n.pt'); m.export(format='onnx',imgsz=416,simplify=True,dynamic=False)"
 mv yolo11n.pt models/yolo/
@@ -92,6 +113,8 @@ python3 -c "from insightface.app import FaceAnalysis; app=FaceAnalysis(name='buf
 # Verify
 python3 scripts/check_models.py
 ```
+
+`scripts/download_models.py` detects your hardware (NVIDIA/Intel/AMD/Coral/CPU) and downloads the best YOLO model + face models, converting to the right format (TensorRT/OpenVINO/TFLite/ONNX) and updating `settings.yaml`. Run `scripts/hardware_detect.sh` to check detection.
 
 ### Step 5: Setup camera network
 
@@ -221,6 +244,20 @@ All settings in `config/settings.yaml`:
 | `redis.stream` | `attendance:events` | Stream name |
 | `attendance.shift_start` | `09:00` | Shift start for Late detection |
 | `attendance.shift_end` | `17:00` | Shift end for Early exit detection |
+| `identity_fusion.person_reid_weights` | `""` | OSNet-style `.pt` weights (optional; HSV fallback otherwise) |
+| `identity_fusion.reid_match_threshold` | `0.82` | Cosine threshold for person-ReID embeddings |
+| `identity_fusion.reid_every_n` | `1` | Extract reID embedding every N frames |
+
+Category 1 event engine + rule engine are configured in `config/category1_events.yaml` (events, entry-exit v2 5-layer params, zone definitions, lines, optimization) and `config/category1_rules.yaml` (rules with AND/OR/NOT conditions, actions, priorities).
+
+### Running the Category 1 pipeline
+
+```bash
+python3 -m src.pipeline.category1_pipeline \
+    --config config/category1_events.yaml \
+    --source "rtsp://127.0.0.1:8554/cam_01" \
+    --display true
+```
 
 ## Project Structure
 
@@ -230,7 +267,9 @@ Face-recognition-ubunto/
 ├── config/
 │   ├── settings.yaml                # All pipeline settings
 │   ├── zones.yaml                   # Door zone polygons
-│   └── go2rtc.yaml                  # RTSP proxy config
+│   ├── go2rtc.yaml                  # RTSP proxy config
+│   ├── category1_events.yaml        # Category 1 events, zones, lines, optimizer
+│   └── category1_rules.yaml         # Rule engine rules
 ├── src/
 │   ├── capture/stream.py            # Camera stream reader
 │   ├── detection/person_yolo.py     # YOLO person detector
@@ -240,12 +279,24 @@ Face-recognition-ubunto/
 │   │   └── identity_fusion.py       # Re-ID across tracks
 │   ├── recognition/
 │   │   ├── face_engine.py           # InsightFace detection + embedding
-│   │   └── gallery.py               # FAISS face gallery
+│   │   ├── gallery.py               # FAISS face gallery
+│   │   └── person_reid.py           # Optional clothing-invariant Re-ID
+│   ├── hardware/
+│   │   ├── detector.py              # GPU/CPU/TPU auto-detection
+│   │   ├── optimizer.py             # Dynamic performance optimizer
+│   │   └── model_loader.py          # Model registry + hot-swap
 │   ├── events/
 │   │   ├── door_intelligence.py     # Polygon FSM engine (3-zone)
 │   │   ├── entry_exit.py            # Legacy line engine
+│   │   ├── entry_exit_v2.py         # 5-layer entry/exit validation
+│   │   ├── zone_engine.py           # Polygon zones, occupancy, intrusion
+│   │   ├── category1_engine.py      # Unified 9-event Category 1 engine
+│   │   ├── rules.py                 # YAML rule engine
 │   │   ├── store.py                 # SQLite event store
 │   │   └── redis_publisher.py       # Redis Streams publisher
+│   ├── pipeline/
+│   │   ├── runner.py                # Main pipeline runner
+│   │   └── category1_pipeline.py    # Category 1 pipeline with integration
 │   ├── reasoning/spatial_temporal.py # U-turn, tailgate, window bias
 │   ├── attendance/
 │   │   ├── db.py                    # Attendance SQLite DB
@@ -257,16 +308,22 @@ Face-recognition-ubunto/
 │       └── assign.py                # Face-to-track assignment
 ├── scripts/
 │   ├── start_go2rtc.sh              # Start RTSP proxy
+│   ├── download_models.py           # Auto-detect HW + download models
+│   ├── download_models.sh           # Shell version of model downloader
+│   ├── hardware_detect.sh           # Hardware detection
 │   ├── enroll_faces.py              # Face enrollment
 │   ├── calibrate_door_regions.py    # Zone polygon calibration
 │   ├── attendance_worker.py         # Redis Stream consumer
 │   └── run_attendance.sh            # 24/7 service wrapper
-├── tests/                           # 83 unit tests
+├── tests/                           # 106 unit tests
 │   ├── test_door_intelligence.py    # FSM state machine tests
 │   ├── test_fetch.py                # Store, gallery, perf tests
 │   ├── test_geometry.py             # Polygon geometry tests
 │   ├── test_reasoning_attendance.py # Reasoning + attendance tests
-│   └── test_identity_fusion.py      # Re-ID tests
+│   ├── test_identity_fusion.py      # Re-ID tests
+│   ├── test_person_reid.py          # Person-ReID engine tests
+│   ├── test_category1_complete.py   # Category 1 engine tests
+│   └── test_implementation_verification.py # HW + integration tests
 └── data/
     ├── faces_gallery/               # Enrolled face images
     ├── db/                          # SQLite databases
@@ -277,20 +334,24 @@ Face-recognition-ubunto/
 
 | Issue | Status |
 |-------|--------|
-| **Appearance Re-ID false merge** — HSV body-histogram re-ID can merge two different people wearing similar-coloured clothes (test showed cosine 0.81–0.85 for distinct persons). To be fixed: use a stricter threshold or a dedicated person-ReID model. | ⚠️ To fix later |
+| **Appearance Re-ID false merge** — HSV body-histogram re-ID can merge two different people wearing similar-coloured clothes. Mitigated by the optional clothing-invariant person-ReID model (signal priority: face > person-ReID > HSV). | ⚠️ To fix fully |
 | **Guest counter burns IDs on fleeting tracks** — fixed: `_expire()` no longer calls `_new_guest()` for tracks that vanish before identity resolution. | ✅ Fixed |
 | **Output buffered when run via systemd** — pipeline logs only streamed to journald after `-u` (unbuffered) flag was added to `run_attendance.sh`. | ✅ Fixed |
+| **Entry/Exit false positives** (boundary jitter, tracker jumps, occlusion, bbox flicker, duplicates) — fixed with the 5-layer validation engine in `entry_exit_v2.py`. | ✅ Fixed |
 
 ## Testing
 
 ```bash
 source .venv/bin/activate
 
-# Run all 83 tests
+# Run all 106 tests
 python -m pytest tests/ -v
 
 # Run door intelligence tests only
 python -m pytest tests/test_door_intelligence.py -v
+
+# Run Category 1 + Re-ID tests
+python -m pytest tests/test_category1_complete.py tests/test_person_reid.py -v
 ```
 
 ## Troubleshooting

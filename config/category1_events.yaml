@@ -1,0 +1,284 @@
+# Category 1 Events Configuration
+# Geometry-Based Events (99% Deterministic)
+# No AI required - Detection + Tracking + Zones/Lines
+
+# =============================================================================
+# EVENT DEFINITIONS
+# =============================================================================
+
+events:
+  # Entry/Exit Events (Line-based)
+  person_entered:
+    name: "Person Entered"
+    description: "Person crosses from OUTSIDE to INSIDE"
+    category: "geometry"
+    deterministic: true
+    requires_tracking: true
+    requires_zones: false
+    
+  person_exited:
+    name: "Person Exited"
+    description: "Person crosses from INSIDE to OUTSIDE"
+    category: "geometry"
+    deterministic: true
+    requires_tracking: true
+    requires_zones: false
+    
+  vehicle_entered:
+    name: "Vehicle Entered"
+    description: "Vehicle crosses from OUTSIDE to INSIDE"
+    category: "geometry"
+    deterministic: true
+    requires_tracking: true
+    requires_zones: false
+    optional_lpr: true
+    
+  vehicle_exited:
+    name: "Vehicle Exited"
+    description: "Vehicle crosses from INSIDE to OUTSIDE"
+    category: "geometry"
+    deterministic: true
+    requires_tracking: true
+    requires_zones: false
+    optional_lpr: true
+
+  # Zone-Based Events
+  restricted_zone_intrusion:
+    name: "Restricted Zone Intrusion"
+    description: "Person/Object enters restricted zone"
+    category: "geometry"
+    deterministic: true
+    requires_tracking: true
+    requires_zones: true
+    min_duration: 2.0  # seconds
+    
+  zone_entry:
+    name: "Zone Entry"
+    description: "Person enters a non-restricted zone"
+    category: "geometry"
+    deterministic: true
+    requires_tracking: true
+    requires_zones: true
+    
+  zone_exit:
+    name: "Zone Exit"
+    description: "Person exits a zone"
+    category: "geometry"
+    deterministic: true
+    requires_tracking: true
+    requires_zones: true
+    
+  # Line Crossing Events
+  line_crossing:
+    name: "Line Crossing"
+    description: "Any object crosses user-defined line"
+    category: "geometry"
+    deterministic: true
+    requires_tracking: true
+    requires_zones: false
+    
+  wrong_direction:
+    name: "Wrong Direction"
+    description: "Object crosses line in forbidden direction"
+    category: "geometry"
+    deterministic: true
+    requires_tracking: true
+    requires_zones: false
+    
+  # Occupancy Events
+  occupancy_limit:
+    name: "Occupancy Limit"
+    description: "Zone occupancy exceeds maximum allowed"
+    category: "geometry"
+    deterministic: true
+    requires_tracking: true
+    requires_zones: true
+    min_duration: 5.0  # seconds
+
+# =============================================================================
+# ENTRY/EXIT ENGINE CONFIGURATION (5-Layer Validation)
+# =============================================================================
+
+entry_exit_v2:
+  # Line configuration (normalized 0-1 coordinates)
+  line:
+    x1: 0.5
+    y1: 0.0
+    x2: 0.5
+    y2: 1.0
+  
+  # 5-Layer Validation Parameters
+  
+  # Layer 1: Signed Distance
+  buffer_threshold: 10.0  # Pixels for BUFFER zone
+  
+  # Layer 2: 5-State FSM
+  min_track_frames: 5      # Minimum frames before considering track
+  min_deep_frames: 3       # Frames required deep in state
+  
+  # Layer 3: Trajectory Validation
+  min_displacement: 20.0   # Minimum distance traveled (pixels)
+  
+  # Layer 4: Track Continuity
+  max_occlusion_time: 5.0  # Seconds to wait before terminating track
+  max_reid_distance: 50.0  # Pixels for re-identification
+  
+  # Layer 5: Event Deduplication
+  debounce_sec: 5.0        # Event lockout period per track
+  hysteresis_px: 20.0      # Spatial hysteresis for reset
+  
+  # General
+  use_foot_point: true     # Use bottom-center of bbox (feet) vs centroid
+  segment_pad: 0.12        # Fraction of segment length for padding
+  min_event_confidence: 0.80
+  
+  # Performance
+  purge_interval: 60.0     # Clean up stale tracks every 60s
+
+# =============================================================================
+# ZONE ENGINE CONFIGURATION
+# =============================================================================
+
+zone_engine:
+  # Zone-based event thresholds
+  occupancy_limit_enabled: true
+  min_occupancy_duration: 5.0  # Seconds for occupancy limit event
+  loitering_threshold: 30.0    # Seconds in zone = loitering
+  restricted_zone_min_duration: 2.0  # Seconds for intrusion event
+  
+  # Object left-behind detection
+  object_stationary_threshold: 20.0  # Seconds
+  owner_distance_threshold: 5.0     # Meters
+
+# =============================================================================
+# ZONE DEFINITIONS
+# =============================================================================
+
+zones:
+  # Example zones (normalized coordinates 0-1)
+  
+  # Entrance zone (where door is)
+  entrance:
+    name: "Main Entrance"
+    polygon:
+      - [0.45, 0.0]   # Bottom-left
+      - [0.55, 0.0]   # Bottom-right
+      - [0.55, 0.3]   # Top-right
+      - [0.45, 0.3]   # Top-left
+    zone_type: "entrance"
+    restricted: false
+    max_occupancy: null
+    
+  # Server room (restricted)
+  server_room:
+    name: "Server Room"
+    polygon:
+      - [0.7, 0.7]    # Top-left
+      - [0.9, 0.7]    # Top-right
+      - [0.9, 0.9]    # Bottom-right
+      - [0.7, 0.9]    # Bottom-left
+    zone_type: "normal"
+    restricted: true
+    max_occupancy: 2
+    
+  # Reception area
+  reception:
+    name: "Reception"
+    polygon:
+      - [0.1, 0.6]    # Top-left
+      - [0.4, 0.6]    # Top-right
+      - [0.4, 0.9]    # Bottom-right
+      - [0.1, 0.9]    # Bottom-left
+    zone_type: "normal"
+    restricted: false
+    max_occupancy: 10
+    
+  # Lobby
+  lobby:
+    name: "Lobby"
+    polygon:
+      - [0.0, 0.3]    # Top-left
+      - [0.5, 0.3]    # Top-right
+      - [0.5, 0.6]    # Bottom-right
+      - [0.0, 0.6]    # Bottom-left
+    zone_type: "normal"
+    restricted: false
+    max_occupancy: 15
+    
+  # Parking area
+  parking:
+    name: "Parking Lot"
+    polygon:
+      - [0.0, 0.0]    # Top-left
+      - [1.0, 0.0]    # Top-right
+      - [1.0, 0.3]    # Bottom-right
+      - [0.0, 0.3]    # Bottom-left
+    zone_type: "normal"
+    restricted: false
+    max_occupancy: null
+
+# =============================================================================
+# LINE DEFINITIONS
+# =============================================================================
+
+lines:
+  # Main entrance line
+  entrance_line:
+    start: [0.5, 0.3]   # Top (outside)
+    end: [0.5, 0.5]     # Bottom (inside)
+    allowed_directions: ["A_to_B"]  # Only allow entry (A to B)
+    
+  # Exit only line
+  exit_line:
+    start: [0.5, 0.5]   # Bottom (inside)
+    end: [0.5, 0.3]     # Top (outside)
+    allowed_directions: ["A_to_B"]  # Only allow exit (A to B)
+
+# =============================================================================
+# PERFORMANCE OPTIMIZATION
+# =============================================================================
+
+optimization:
+  # Enable/disable specific events
+  enable:
+    person_entered: true
+    person_exited: true
+    vehicle_entered: true
+    restricted_zone_intrusion: true
+    line_crossing: true
+    wrong_direction: true
+    occupancy_limit: true
+    zone_entry: true
+    zone_exit: true
+  
+  # Priority (higher = processed first)
+  priorities:
+    person_entered: 10
+    person_exited: 10
+    restricted_zone_intrusion: 9
+    vehicle_entered: 8
+    occupancy_limit: 7
+    line_crossing: 6
+    wrong_direction: 6
+    zone_entry: 5
+    zone_exit: 5
+
+# =============================================================================
+# INTEGRATION WITH EXISTING SYSTEM
+# =============================================================================
+
+integration:
+  # Use Category 1 engine as primary
+  use_category1_primary: true
+  
+  # Fallback to legacy engine if Category 1 fails
+  fallback_to_legacy: true
+  
+  # Enable hardware auto-detection
+  auto_detect_hardware: true
+  
+  # Enable dynamic optimization
+  enable_dynamic_optimizer: true
+  
+  # Enable model hot-swapping
+  enable_hot_swap: true

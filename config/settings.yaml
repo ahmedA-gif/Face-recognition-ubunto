@@ -88,12 +88,18 @@ entry_exit:
 
 # ── Identity Fusion & Re-ID ───────────────────────────────────────────────────
 # Resolves "same person, different track IDs" into persistent global ids.
+# Signal priority: gallery name > face embedding > person-ReID > HSV histogram.
 identity_fusion:
   enabled: true
   max_stitch_dist_px: 60          # spatial window to stitch expired tracks (px)
   max_stitch_time_sec: 2.0        # temporal window to stitch expired tracks (s)
   embedding_match_threshold: 0.42 # ArcFace cosine threshold for face Re-ID
   appearance_match_threshold: 0.85  # HSV body-histogram cosine threshold for no-face Re-ID
+  # ── Optional clothing-invariant person-ReID (OSNet-style, scripted/traced .pt) ──
+  # Leave "" to keep the HSV fallback. Also accepted under models.person_reid_weights.
+  person_reid_weights: ""         # e.g. "models/reid/osnet_scripted.pt"
+  reid_match_threshold: 0.82      # cosine threshold for person-ReID embeddings
+  reid_every_n: 1                 # extract a reid embedding every N frames
   max_pool_embeddings: 8          # embeddings kept per identity (lighting views)
   state_path: "data/db/identity_state.json"  # persisted Guest counter + Re-ID pools
 

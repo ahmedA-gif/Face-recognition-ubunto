@@ -20,6 +20,7 @@ from src.overlay.draw import OverlayRenderer
 from src.reasoning.spatial_temporal import SpatialTemporalReasoning
 from src.recognition.face_engine import FaceEngine
 from src.recognition.gallery import FaceGallery
+from src.recognition.person_reid import PersonReIDEngine
 from src.tracking.bytetrack import ByteTracker, Track
 from src.tracking.identity_fusion import IdentityFusionEngine
 from src.utils.assign import attach_faces_to_tracks, appearance_signature
@@ -134,12 +135,30 @@ def _build_components(cfg: dict[str, Any]):
 
     # ── new intelligence modules (config-gated) ────────────────────────────
     if_in = cfg.get("identity_fusion", {})
+
+    # Optional clothing-invariant person-ReID (scripted/traced torch model).
+    # Reads weights from identity_fusion.person_reid_weights OR
+    # models.person_reid_weights; disabled (HSV fallback kept) otherwise.
+    reid = None
+    reid_weights = if_in.get("person_reid_weights") or m.get("person_reid_weights")
+    if reid_weights:
+        try:
+            reid = PersonReIDEngine(
+                weights=reid_weights,
+                device=pipe.get("device", "cpu"),
+                input_size=tuple(if_in.get("reid_input_size", [256, 128])),
+            )
+            print(f"[PersonReID] ACTIVE model={reid_weights} device={pipe.get('device', 'cpu')}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[PersonReID] DISABLED — could not load {reid_weights}: {exc}")
+
     if if_in.get("enabled", True):
         fusion = IdentityFusionEngine(
             max_stitch_dist_px=if_in.get("max_stitch_dist_px", 60),
             max_stitch_time_sec=if_in.get("max_stitch_time_sec", 2.0),
             embedding_match_threshold=if_in.get("embedding_match_threshold", m["face_match_threshold"]),
             appearance_match_threshold=if_in.get("appearance_match_threshold", 0.85),
+            reid_match_threshold=if_in.get("reid_match_threshold", 0.82),
             max_pool_embeddings=if_in.get("max_pool_embeddings", 8),
             state_path=if_in.get("state_path", "data/db/identity_state.json"),
         )
@@ -147,7 +166,8 @@ def _build_components(cfg: dict[str, Any]):
         fusion = None
     print(f"[IdentityFusion] {'active' if fusion else 'disabled'}"
           f" (face_reid={if_in.get('embedding_match_threshold', m['face_match_threshold'])}, "
-          f"appearance_reid={if_in.get('appearance_match_threshold', 0.85)})")
+          f"appearance_reid={if_in.get('appearance_match_threshold', 0.85)}, "
+          f"person_reid={if_in.get('reid_match_threshold', 0.82) if reid else 'off'})")
 
     ab = cfg.get("auto_boundary", {})
     if ab.get("enabled", True):
@@ -198,7 +218,7 @@ def _build_components(cfg: dict[str, Any]):
 
     return (detector, tracker, face_engine, gallery, store, entry_exit, overlay,
             fusion, boundary, reasoner, att_db, attendance,
-            publisher, using_door_engine)
+            publisher, using_door_engine, reid)
 
 
 def _fix_counts(engine: EntryExitEngine) -> None:
@@ -224,12 +244,13 @@ def run_pipeline(
     source = normalize_source(source_override if source_override is not None else cam_cfg["source"])
     (detector, tracker, face_engine, gallery, store, event_engine, overlay,
      fusion, boundary, reasoner, att_db, attendance,
-     publisher, using_door_engine) = _build_components(cfg)
+     publisher, using_door_engine, reid) = _build_components(cfg)
 
     if skip_frames is None:
         skip_frames = int(pipe.get("skip_frames", 1))
     if face_every_n is None:
         face_every_n = int(pipe.get("face_every_n", 1))
+    reid_every_n = int(cfg.get("identity_fusion", {}).get("reid_every_n", 1))
 
     writer: Optional[cv2.VideoWriter] = None
     frames_processed = 0
@@ -354,6 +375,7 @@ def run_pipeline(
 
                 run_det = (frames_processed - 1) % max(1, skip_frames) == 0
                 run_face = (frames_processed - 1) % max(1, face_every_n) == 0
+                run_reid = (frames_processed - 1) % max(1, reid_every_n) == 0
 
                 if run_det:
                     last_dets = detector.detect(frame)
@@ -402,6 +424,11 @@ def run_pipeline(
                     for t in tracks:
                         if t.meta.get("appearance") is None:
                             t.meta["appearance"] = appearance_signature(frame, t.xyxy)
+                    if reid is not None and run_reid:
+                        # Clothing-invariant person-ReID per track (when the
+                        # model is enabled); HSV stays as the backstop.
+                        for t in tracks:
+                            t.meta["person_reid"] = reid.extract(frame, t.xyxy)
                     fusion.update(tracks)
 
                 # ── Auto boundary: feed trajectories, apply when learned ──
@@ -454,11 +481,12 @@ def run_pipeline(
 
                 if fusion is not None:
                     stats = fusion.stats()
-                    total_fused = stats["stitches"] + stats["face_merges"]
+                    total_fused = stats["stitches"] + stats["face_merges"] + stats["reid_merges"]
                     if total_fused != last_fused and total_fused > 0:
                         print(
                             f"[IdentityFusion] tracks→identities={len(fusion.track_identity)} "
                             f"stitches={stats['stitches']} face_merges={stats['face_merges']}"
+                            f" reid_merges={stats['reid_merges']}"
                         )
                         last_fused = total_fused
 

@@ -1,0 +1,406 @@
+# Category 1 Event Rules
+# Rules for filtering, tagging, and processing geometry-based events
+
+rules:
+  # =============================================================================
+  # CONFIDENCE-BASED RULES
+  # =============================================================================
+
+  # High confidence events - fast-track
+  - rule_id: "high_confidence_fast_track"
+    name: "High Confidence Fast-Track"
+    description: "Events with confidence >= 0.95 skip additional validation"
+    event_types: 
+      - "person_entered"
+      - "person_exited"
+      - "vehicle_entered"
+      - "restricted_zone_intrusion"
+    conditions:
+      - field: "confidence"
+        gte: 0.95
+    actions:
+      - type: "tag"
+        parameters:
+          tags: ["high_confidence", "fast_track"]
+      - type: "set_field"
+        parameters:
+          field: "_priority"
+          value: "high"
+    enabled: true
+    priority: 100
+
+  # Medium confidence events - standard processing
+  - rule_id: "medium_confidence_standard"
+    name: "Medium Confidence Standard"
+    description: "Events with confidence >= 0.8 get standard processing"
+    event_types: 
+      - "person_entered"
+      - "person_exited"
+      - "vehicle_entered"
+    conditions:
+      and:
+        - field: "confidence"
+          gte: 0.8
+        - field: "confidence"
+          lt: 0.95
+    actions:
+      - type: "tag"
+        parameters:
+          tags: ["medium_confidence"]
+      - type: "set_field"
+        parameters:
+          field: "_priority"
+          value: "medium"
+    enabled: true
+    priority: 50
+
+  # Low confidence events - require review
+  - rule_id: "low_confidence_review"
+    name: "Low Confidence Review Required"
+    description: "Events with confidence < 0.8 are flagged for review"
+    event_types: 
+      - "person_entered"
+      - "person_exited"
+      - "vehicle_entered"
+      - "restricted_zone_intrusion"
+    conditions:
+      - field: "confidence"
+        lt: 0.8
+    actions:
+      - type: "tag"
+        parameters:
+          tags: ["low_confidence", "needs_review"]
+      - type: "set_field"
+        parameters:
+          field: "_priority"
+          value: "low"
+      - type: "set_field"
+        parameters:
+          field: "_review_required"
+          value: true
+    enabled: true
+    priority: 10
+
+  # =============================================================================
+  # SECURITY ALERTS
+  # =============================================================================
+
+  # Restricted zone intrusion - critical alert
+  - rule_id: "restricted_zone_critical"
+    name: "Restricted Zone Intrusion - Critical"
+    description: "Immediate alert for any restricted zone intrusion"
+    event_types:
+      - "restricted_zone_intrusion"
+    conditions:
+      or:
+        - field: "metadata.zone_id"
+          in: ["server_room", "vault", "control_room", "data_center"]
+        - field: "zone_id"
+          in: ["server_room", "vault", "control_room", "data_center"]
+    actions:
+      - type: "tag"
+        parameters:
+          tags: ["security_alert", "critical", "restricted_zone"]
+      - type: "set_field"
+        parameters:
+          field: "_severity"
+          value: "critical"
+      - type: "notify"
+        parameters:
+          message: "🚨 CRITICAL: Restricted Zone Intrusion by {{person}} in {{metadata.zone_name or zone_name}}"
+    enabled: true
+    priority: 1000
+
+  # Occupancy limit exceeded
+  - rule_id: "occupancy_exceeded"
+    name: "Occupancy Limit Exceeded"
+    description: "Alert when zone occupancy exceeds configured limit"
+    event_types:
+      - "occupancy_limit"
+    conditions:
+      - field: "metadata.current"
+        gt: 10
+    actions:
+      - type: "tag"
+        parameters:
+          tags: ["occupancy_alert", "capacity_exceeded"]
+      - type: "set_field"
+        parameters:
+          field: "_severity"
+          value: "high"
+      - type: "notify"
+        parameters:
+          message: "⚠️ Occupancy Limit Exceeded: {{metadata.current}} people in {{metadata.zone_name}} (Max: {{metadata.max}})"
+    enabled: true
+    priority: 200
+
+  # =============================================================================
+  # VEHICLE EVENTS
+  # =============================================================================
+
+  # Vehicle with LPR - add plate info
+  - rule_id: "vehicle_with_lpr"
+    name: "Vehicle Event with LPR"
+    description: "Process vehicle events with license plate recognition"
+    event_types:
+      - "vehicle_entered"
+      - "vehicle_exited"
+    conditions:
+      - field: "metadata.license_plate"
+        not_equal: null
+    actions:
+      - type: "tag"
+        parameters:
+          tags: ["vehicle", "with_lpr"]
+      - type: "set_field"
+        parameters:
+          field: "_has_lpr"
+          value: true
+    enabled: true
+    priority: 50
+
+  # Vehicle without LPR
+  - rule_id: "vehicle_without_lpr"
+    name: "Vehicle Event without LPR"
+    description: "Process vehicle events without license plate recognition"
+    event_types:
+      - "vehicle_entered"
+      - "vehicle_exited"
+    conditions:
+      or:
+        - field: "metadata.license_plate"
+          equal: null
+        - field: "metadata.license_plate"
+          not_in: []  # Empty list means not present
+    actions:
+      - type: "tag"
+        parameters:
+          tags: ["vehicle", "no_lpr"]
+      - type: "set_field"
+        parameters:
+          field: "_has_lpr"
+          value: false
+    enabled: true
+    priority: 40
+
+  # =============================================================================
+  # ZONE-SPECIFIC RULES
+  # =============================================================================
+
+  # Loitering in sensitive areas
+  - rule_id: "loitering_sensitive_areas"
+    name: "Loitering in Sensitive Areas"
+    description: "Alert on prolonged loitering in sensitive zones"
+    event_types:
+      - "loitering"
+    conditions:
+      and:
+        - field: "metadata.duration"
+          gte: 60.0
+        - field: "metadata.zone_id"
+          in: ["parking", "entrance", "lobby", "reception"]
+    actions:
+      - type: "tag"
+        parameters:
+          tags: ["security_alert", "loitering", "sensitive_area"]
+      - type: "set_field"
+        parameters:
+          field: "_severity"
+          value: "medium"
+      - type: "notify"
+        parameters:
+          message: "⏳ Loitering Alert: Person in {{metadata.zone_name}} for {{metadata.duration}}s"
+    enabled: true
+    priority: 80
+
+  # Zone entry in restricted areas
+  - rule_id: "zone_entry_restricted"
+    name: "Zone Entry in Restricted Areas"
+    description: "Alert when someone enters a restricted zone"
+    event_types:
+      - "zone_entry"
+    conditions:
+      - field: "metadata.restricted"
+        equal: true
+    actions:
+      - type: "tag"
+        parameters:
+          tags: ["restricted_zone_entry", "security_alert"]
+      - type: "set_field"
+        parameters:
+          field: "_severity"
+          value: "high"
+      - type: "notify"
+        parameters:
+          message: "🔒 Restricted Zone Entry: {{person}} entered {{metadata.zone_name}}"
+    enabled: true
+    priority: 90
+
+  # =============================================================================
+  # LINE CROSSING RULES
+  # =============================================================================
+
+  # Wrong direction crossing
+  - rule_id: "wrong_direction_crossing"
+    name: "Wrong Direction Line Crossing"
+    description: "Alert when object crosses line in forbidden direction"
+    event_types:
+      - "wrong_direction"
+    actions:
+      - type: "tag"
+        parameters:
+          tags: ["wrong_direction", "security_alert"]
+      - type: "set_field"
+        parameters:
+          field: "_severity"
+          value: "medium"
+      - type: "notify"
+        parameters:
+          message: "↩️ Wrong Direction: Object crossed line {{metadata.line_id}} in forbidden direction"
+    enabled: true
+    priority: 70
+
+  # =============================================================================
+  # TIME-BASED RULES
+  # =============================================================================
+
+  # Night time events - higher priority
+  - rule_id: "night_time_events"
+    name: "Night Time Events"
+    description: "Increase priority of events during night hours"
+    event_types:
+      - "person_entered"
+      - "person_exited"
+      - "restricted_zone_intrusion"
+    conditions:
+      - field: "time"
+        regex: "^[00-05]|[21-23].*"  # Between 9PM and 6AM
+    actions:
+      - type: "tag"
+        parameters:
+          tags: ["night_time"]
+      - type: "set_field"
+        parameters:
+          field: "_priority"
+          value: "high"
+    enabled: true
+    priority: 60
+
+  # =============================================================================
+  # EVENT DEDUPLICATION RULES
+  # =============================================================================
+
+  # Reject duplicate events (same track, same type within 5 seconds)
+  - rule_id: "reject_duplicates"
+    name: "Reject Duplicate Events"
+    description: "Reject events with same track_id and direction within 5 seconds"
+    event_types:
+      - "person_entered"
+      - "person_exited"
+      - "vehicle_entered"
+      - "vehicle_exited"
+    conditions:
+      and:
+        - field: "_duplicate_detected"
+          equal: true
+    actions:
+      - type: "reject"
+        parameters:
+          reason: "Duplicate event"
+    enabled: true
+    priority: -100  # Run first
+
+  # =============================================================================
+  # LOGGING RULES
+  # =============================================================================
+
+  # Log all events to file
+  - rule_id: "log_all_events"
+    name: "Log All Events"
+    description: "Log all Category 1 events to system log"
+    event_types:
+      - "person_entered"
+      - "person_exited"
+      - "vehicle_entered"
+      - "vehicle_exited"
+      - "restricted_zone_intrusion"
+      - "line_crossing"
+      - "wrong_direction"
+      - "occupancy_limit"
+      - "zone_entry"
+      - "zone_exit"
+    actions:
+      - type: "log"
+        parameters:
+          message: "[CATEGORY1] {{event_type or direction}} - {{person}} - Confidence: {{confidence}}"
+    enabled: true
+    priority: 0
+
+  # =============================================================================
+  # WEBHOOK RULES
+  # =============================================================================
+
+  # Send all events to central monitoring system
+  - rule_id: "webhook_all_events"
+    name: "Send All Events to Central System"
+    description: "Forward all Category 1 events to central monitoring"
+    event_types:
+      - "person_entered"
+      - "person_exited"
+      - "vehicle_entered"
+      - "vehicle_exited"
+      - "restricted_zone_intrusion"
+      - "line_crossing"
+      - "wrong_direction"
+      - "occupancy_limit"
+      - "zone_entry"
+      - "zone_exit"
+    actions:
+      - type: "webhook"
+        parameters:
+          url: "http://localhost:8080/api/events"
+          method: "POST"
+          headers:
+            Content-Type: "application/json"
+            X-Event-Type: "category1"
+          payload:
+            event_id: "{{event_id}}"
+            event_type: "{{event_type or direction}}"
+            camera_id: "{{camera_id}}"
+            person: "{{person}}"
+            confidence: "{{confidence}}"
+            timestamp: "{{date}} {{time}}"
+            metadata: "{{metadata}}"
+    enabled: false  # Disable by default, enable when needed
+    priority: 0
+
+  # Send security alerts to security team
+  - rule_id: "webhook_security_alerts"
+    name: "Send Security Alerts to Security Team"
+    description: "Forward security-related events to security team"
+    event_types:
+      - "restricted_zone_intrusion"
+      - "occupancy_limit"
+      - "loitering"
+    conditions:
+      - field: "_tags"
+        contains: "security_alert"
+    actions:
+      - type: "webhook"
+        parameters:
+          url: "https://security.company.com/api/alerts"
+          method: "POST"
+          headers:
+            Content-Type: "application/json"
+            Authorization: "Bearer YOUR_API_KEY"
+          payload:
+            alert_type: "security"
+            event_id: "{{event_id}}"
+            event_type: "{{event_type or direction}}"
+            camera_id: "{{camera_id}}"
+            person: "{{person}}"
+            severity: "{{_severity}}"
+            message: "{{_reject_reason or metadata.message}}"
+            timestamp: "{{date}} {{time}}"
+    enabled: false  # Enable and configure with real API key
+    priority: 100
