@@ -34,10 +34,18 @@ models:
   tracker_config: "models/tracker/bytetrack.yaml"
 
 pipeline:
-  device: "cpu"
+  device: "cpu"              # Auto-detected or set via VMS_DEVICE env var
+  backend: "onnx"            # onnx, tensorrt, openvino, tflite - auto-detected or set via VMS_BACKEND
   skip_frames: 2              # detect every 2 frames (fast enough now)
   face_every_n: 3
   max_tracks: 50
+
+# GPU-specific settings (optional)
+gpu:
+  enabled: true              # Enable GPU acceleration when available
+  vram_threshold_gb: 2.0    # Minimum VRAM to use GPU
+  tensorrt_fp16: true        # Use FP16 precision for TensorRT (faster, less memory)
+  tensorrt_int8: false       # Use INT8 quantization (faster, even less memory, needs calibration)
 
 # ── Door Intelligence Engine (polygon FSM) ────────────────────────────────────
 # PRIMARY entry/exit engine (replaces the virtual line).

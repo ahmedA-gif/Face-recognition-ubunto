@@ -6,18 +6,21 @@ PyYAML==6.0.2
 
 # Detection and recognition
 ultralytics==8.4.112
+# Use onnxruntime-gpu for NVIDIA GPU acceleration
+# Use onnxruntime for CPU-only systems
+# pip will install the appropriate version based on your system
 onnxruntime==1.18.1
-insightface==0.7.3
+insightface==1.0.1
 
-# FAISS-CPU — explicit CPU-only vector search for the face gallery
-# Install ONLY faiss-cpu (NOT faiss-gpu) on CPU machines.
-# Incompatible builds will be warned about and silently downgraded to NumPy.
+# FAISS - install faiss-cpu for CPU, faiss-gpu for CUDA
+# For CPU-only systems: faiss-cpu==1.8.0
+# For GPU systems: faiss-gpu==1.8.0 (requires CUDA)
 faiss-cpu==1.8.0
 
 # Tracking
 scipy==1.13.1
 filterpy==1.4.5
-lapx==0.5.2
+lapx==0.9.4
 
 # Real-time event stream (attendance:events) — replaces CSV on the hot path
 redis==5.2.1
@@ -30,3 +33,21 @@ redis==5.2.1
 # fastapi
 # uvicorn
 # psycopg2-binary   # attendance worker -> PostgreSQL (Phase 6)
+
+# ---------------------------------------------------------------------------
+# GPU-SPECIFIC DEPENDENCIES (Optional - install as needed)
+# ---------------------------------------------------------------------------
+# For NVIDIA GPU acceleration:
+# pip install onnxruntime-gpu
+# pip install nvidia-tensorrt nvidia-cuda-runtime nvidia-cudnn
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+# pip install pycuda
+
+# For Intel iGPU acceleration:
+# pip install openvino openvino-dev
+
+# For AMD GPU acceleration:
+# pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/rocm5.6
+
+# For Coral TPU:
+# pip install tflite-runtime pycoral

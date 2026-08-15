@@ -33,6 +33,10 @@ Options:
     --yolo10           Use YOLOv10 models
     --yolo11           Use YOLOv11 models (default)
     --clean            Remove existing models before downloading
+    --no-convert        Skip ONNX/TensorRT/OpenVINO conversion
+    --no-registry      Skip model registry creation
+    --tensorrt         Build TensorRT engines after downloading (NVIDIA only)
+    --fp16             Use FP16 precision for TensorRT engines
     --help, -h         Show this help
 
 Examples:
@@ -518,6 +522,16 @@ def main() -> None:
         action="store_true",
         help="Skip model registry creation"
     )
+    parser.add_argument(
+        "--tensorrt",
+        action="store_true",
+        help="Build TensorRT engines after downloading (NVIDIA only)"
+    )
+    parser.add_argument(
+        "--fp16",
+        action="store_true",
+        help="Use FP16 precision for TensorRT engines"
+    )
     
     args = parser.parse_args()
     
@@ -741,23 +755,54 @@ def main() -> None:
         if f.is_dir():
             print(f"  - {f.name}/")
     
+    # =========================================================================
+    # BUILD TENSORRT ENGINES (if requested and NVIDIA)
+    # =========================================================================
+    if args.tensorrt and hardware == "nvidia":
+        print_header("BUILDING TENSORRT ENGINES")
+        try:
+            import subprocess
+            fp16_flag = " --fp16" if args.fp16 else ""
+            result = subprocess.run(
+                ["python3", "scripts/build_tensorrt.py", "--all" + fp16_flag],
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            if result.returncode == 0:
+                print_success("TensorRT engines built successfully")
+                print(result.stdout)
+            else:
+                print_warning("TensorRT build returned non-zero exit code")
+                print(result.stderr)
+        except ImportError:
+            print_warning("subprocess not available, skipping TensorRT build")
+        except Exception as e:
+            print_warning(f"TensorRT build failed: {e}")
+
     print(f"\n{'='*60}")
     print("NEXT STEPS:")
     print(f"{'='*60}")
-    print("1. cd /Users/macbookpro/Desktop/Face-recognition-ubunto")
+    print(f"1. cd {ROOT}")
     print("2. python3 main.py --source 'your_camera_source' --display true")
     print("")
     print("For TensorRT/ROCm/OpenVINO optimizations:")
     if hardware == "nvidia":
-        print("  - Run: python3 scripts/build_tensorrt.py")
+        if not args.tensorrt:
+            print("  - Run: python3 scripts/build_tensorrt.py --all")
+        print("  - Set: VMS_DEVICE=cuda:0 VMS_BACKEND=tensorrt")
     elif hardware == "intel":
         print("  - Install: pip install openvino")
+        print("  - Set: VMS_DEVICE=GPU VMS_BACKEND=openvino")
     elif hardware == "amd":
         print("  - Install ROCm drivers")
+        print("  - Set: VMS_DEVICE=cuda:0 VMS_BACKEND=onnx")
     elif hardware == "coral":
         print("  - Already optimized for TFLite")
+        print("  - Set: VMS_DEVICE=cpu VMS_BACKEND=tflite")
     else:
         print("  - CPU mode: All optimizations applied")
+        print("  - Set: VMS_DEVICE=cpu VMS_BACKEND=onnx")
     print("")
 
 

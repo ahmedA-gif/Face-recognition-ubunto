@@ -66,6 +66,14 @@ def _build_components(cfg: dict[str, Any]):
     ev = cfg["events"]
     ov = cfg["overlay"]
 
+    # Get backend from config or default to onnx
+    backend = pipe.get("backend", "onnx")
+    # Check environment variable for backend override
+    import os
+    env_backend = os.environ.get("VMS_BACKEND", "").lower()
+    if env_backend:
+        backend = env_backend
+    
     detector = PersonDetector(
         weights=m.get("yolo_onnx", m["yolo_weights"]),
         conf=m["yolo_conf"],
@@ -73,6 +81,7 @@ def _build_components(cfg: dict[str, Any]):
         imgsz=m["yolo_imgsz"],
         device=pipe["device"],
         person_class_id=m["person_class_id"],
+        backend=backend,
     )
     tracker = ByteTracker()
     face_engine = FaceEngine(root=m["face_root"], pack=m["face_pack"], det_size=tuple(m["face_det_size"]))

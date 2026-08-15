@@ -223,6 +223,13 @@ class Category1Pipeline:
     def _initialize_detector(self) -> None:
         """Initialize person detector."""
         try:
+            # Get backend from config or environment
+            backend = self.config.backend if hasattr(self.config, 'backend') else "onnx"
+            import os
+            env_backend = os.environ.get("VMS_BACKEND", "").lower()
+            if env_backend:
+                backend = env_backend
+            
             self.detector = PersonDetector(
                 weights=self.config.model_path,
                 conf=self.config.detection_conf,
@@ -230,6 +237,7 @@ class Category1Pipeline:
                 imgsz=self.config.detection_imgsz,
                 device=self.config.framework,
                 person_class_id=self.config.person_class_id,
+                backend=backend,
             )
             logger.info("Person detector initialized")
         except Exception as e:

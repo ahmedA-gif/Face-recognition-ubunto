@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -58,7 +59,7 @@ def _nms(
 
 
 class PersonDetector:
-    """YOLO nano person-only detector (CPU via ONNX Runtime)."""
+    """YOLO nano person-only detector (GPU/CPU via ONNX Runtime or TensorRT)."""
 
     def __init__(
         self,
@@ -68,27 +69,166 @@ class PersonDetector:
         imgsz: int = 416,
         device: str = "cpu",
         person_class_id: int = 0,
+        backend: str = "onnx",
     ) -> None:
-        import onnxruntime as ort
-
         self.conf = conf
         self.iou = iou
         self.imgsz = imgsz
         self.person_class_id = person_class_id
-        self.session = ort.InferenceSession(weights, providers=["CPUExecutionProvider"])
+        self.device = device
+        self.backend = backend.lower()
+        
+        # Try to use environment variable for device
+        env_device = os.environ.get("VMS_DEVICE", "").lower()
+        if env_device and device == "cpu":
+            self.device = env_device
+        
+        # Try to use environment variable for backend
+        env_backend = os.environ.get("VMS_BACKEND", "").lower()
+        if env_backend:
+            self.backend = env_backend
+        
+        # Initialize the appropriate backend
+        self._init_backend(weights)
+        
+        # Get model metadata
         meta = self.session.get_modelmeta()
         inp = self.session.get_inputs()[0]
         self._inp_name = inp.name
-        self._inp_shape = inp.shape  # e.g. [1, 3, H, W] or [1, 3, -1, -1]
+        self._inp_shape = inp.shape
         self._num_classes = 80 if "v8" in meta.description.lower() or "yolo" in meta.description.lower() else 80
+    
+    def _init_backend(self, weights: str) -> None:
+        """Initialize the appropriate inference backend."""
+        weight_path = str(weights)
+        
+        # Check if it's a TensorRT engine
+        if self.backend == "tensorrt" or weight_path.endswith(".engine"):
+            self._init_tensorrt(weight_path)
+        # Check if it's OpenVINO
+        elif self.backend == "openvino" or weight_path.endswith(".xml"):
+            self._init_openvino(weight_path)
+        # Default to ONNX Runtime
+        else:
+            self._init_onnxruntime(weight_path)
+    
+    def _init_tensorrt(self, engine_path: str) -> None:
+        """Initialize TensorRT backend."""
+        try:
+            import tensorrt as trt
+            import pycuda.driver as cuda
+            import pycuda.autoinit
+            
+            logger = trt.Logger(trt.Logger.WARNING)
+            with open(engine_path, "rb") as model:
+                self.engine = trt.Runtime(logger).deserialize_cuda_engine(model.read())
+            
+            self.context = self.engine.create_execution_context()
+            
+            # Allocate buffers
+            self.stream = cuda.Stream()
+            self.inputs = []
+            self.outputs = []
+            self.bindings = []
+            
+            for binding in self.engine:
+                size = trt.volume(self.engine.get_binding_shape(binding)) * self.engine.max_batch_size
+                dtype = trt.nptype(self.engine.get_binding_dtype(binding))
+                if self.engine.binding_is_input(binding):
+                    host_mem = cuda.pagelocked_empty(size, dtype)
+                    device_mem = cuda.mem_alloc(host_mem.nbytes)
+                    self.inputs.append({'host': host_mem, 'device': device_mem})
+                else:
+                    host_mem = cuda.pagelocked_empty(size, dtype)
+                    device_mem = cuda.mem_alloc(host_mem.nbytes)
+                    self.outputs.append({'host': host_mem, 'device': device_mem})
+                self.bindings.append(int(device_mem))
+            
+            self._inp_name = "input"
+            self._is_tensorrt = True
+            
+        except ImportError as e:
+            print(f"[WARNING] TensorRT not available: {e}. Falling back to ONNX Runtime.")
+            self._init_onnxruntime(engine_path)
+    
+    def _init_openvino(self, xml_path: str) -> None:
+        """Initialize OpenVINO backend."""
+        try:
+            from openvino.runtime import Core
+            
+            core = Core()
+            model = core.read_model(xml_path)
+            
+            # Get device
+            ov_device = "GPU" if self.device in ["gpu", "cuda:0", "cuda"] else "CPU"
+            compiled_model = core.compile_model(model, ov_device)
+            
+            self.session = compiled_model
+            self.output_layer = compiled_model.output(0)
+            self._inp_name = compiled_model.input(0).name if len(compiled_model.inputs) > 0 else "input"
+            self._is_openvino = True
+            self._is_tensorrt = False
+            
+        except ImportError as e:
+            print(f"[WARNING] OpenVINO not available: {e}. Falling back to ONNX Runtime.")
+            self._init_onnxruntime(xml_path)
+    
+    def _init_onnxruntime(self, onnx_path: str) -> None:
+        """Initialize ONNX Runtime backend with GPU/CPU support."""
+        try:
+            import onnxruntime as ort
+            
+            # Determine providers based on device
+            providers = []
+            device_str = self.device.lower()
+            
+            if device_str.startswith("cuda:") or device_str == "cuda" or device_str == "gpu":
+                # GPU with CUDA
+                try:
+                    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+                except:
+                    providers = ["CPUExecutionProvider"]
+            elif device_str == "cpu":
+                providers = ["CPUExecutionProvider"]
+            else:
+                # Auto-detect: try GPU first, then CPU
+                try:
+                    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+                except:
+                    providers = ["CPUExecutionProvider"]
+            
+            # Set provider options for GPU
+            provider_options = []
+            if "CUDAExecutionProvider" in providers:
+                provider_options = [
+                    {"device_id": 0},  # Use first GPU
+                ]
+            
+            self.session = ort.InferenceSession(
+                onnx_path, 
+                providers=providers,
+                provider_options=provider_options if provider_options else None
+            )
+            
+            self._is_tensorrt = False
+            self._is_openvino = False
+            
+        except ImportError as e:
+            raise ImportError(f"ONNX Runtime not available: {e}. Please install with: pip install onnxruntime")
 
     def detect(self, frame: np.ndarray) -> List[Detection]:
         letterboxed, scale, dx, dy = _letterbox(frame, (self.imgsz, self.imgsz))
         blob = letterboxed.astype(np.float32) / 255.0
         blob = np.transpose(blob, (2, 0, 1))[None, :, :, :]
 
-        outputs = self.session.run(None, {self._inp_name: blob})
-        pred = outputs[0][0]
+        # Handle different backends
+        if getattr(self, '_is_tensorrt', False):
+            pred = self._infer_tensorrt(blob)
+        elif getattr(self, '_is_openvino', False):
+            pred = self._infer_openvino(blob)
+        else:
+            outputs = self.session.run(None, {self._inp_name: blob})
+            pred = outputs[0][0]
 
         num_classes = pred.shape[0] - 4
         boxes = pred[:4, :]
@@ -124,3 +264,26 @@ class PersonDetector:
                 )
             )
         return out
+    
+    def _infer_tensorrt(self, blob: np.ndarray) -> np.ndarray:
+        """Run inference using TensorRT."""
+        import pycuda.driver as cuda
+        
+        np.copyto(self.inputs[0]['host'], blob.ravel())
+        cuda.memcpy_htod_async(self.inputs[0]['device'], self.inputs[0]['host'], self.stream)
+        
+        self.context.execute_async_v2(
+            bindings=self.bindings,
+            stream_handle=self.stream.handle
+        )
+        
+        cuda.memcpy_dtoh_async(self.outputs[0]['host'], self.outputs[0]['device'], self.stream)
+        self.stream.synchronize()
+        
+        return self.outputs[0]['host'].reshape([1, -1, *blob.shape[2:]])
+    
+    def _infer_openvino(self, blob: np.ndarray) -> np.ndarray:
+        """Run inference using OpenVINO."""
+        input_tensor = blob.astype(np.float32)
+        result = self.session(input_tensor)[self.output_layer]
+        return result
