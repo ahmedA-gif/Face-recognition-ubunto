@@ -1,162 +1,119 @@
-# Person Face Events — CPU settings
-
 camera:
-  # ── via go2rtc (recommended — start ./go2rtc first) ──────────────────────
-  source: "rtsp://127.0.0.1:8554/cam_01_sub"  # sub stream — best for CPU AI
-  # source: "rtsp://127.0.0.1:8554/cam_01"    # main stream — higher quality
-  #
-  # ── Direct (no go2rtc) ────────────────────────────────────────────────────
-  # source: "rtsp://admin:admin1234@192.168.2.112:554/cam/realmonitor?channel=1&subtype=0"
-  # source: 0   # USB webcam
+  source: rtsp://127.0.0.1:8554/cam_01_sub
   buffer_size: 1
   width: 1280
   height: 720
-  ip: "192.168.2.112"
-  username: "admin"
-  # password: "${CAMERA_PASSWORD}"  # set via environment variable
+  ip: 192.168.2.112
+  username: admin
   channel: 1
-
 models:
-  yolo_weights: "models/yolo/yolo11n.pt"
-  yolo_onnx: "models/yolo/yolo11n.onnx"
+  yolo_weights: models/yolo/yolo11n.pt
+  yolo_onnx: models/yolo/yolo11n.onnx
   yolo_imgsz: 416
   yolo_conf: 0.45
   yolo_iou: 0.5
-  person_class_id: 0          # COCO person only
-
-  face_root: "models/face"
-  face_pack: "buffalo_s"      # ArcFace R34 — fast for door cams
-  face_det_size: [320, 320]
-  face_match_threshold: 0.35  # cosine similarity (lower = more lenient matching)
+  person_class_id: 0
+  face_root: models/face
+  face_pack: buffalo_s
+  face_det_size:
+  - 320
+  - 320
+  face_match_threshold: 0.35
   min_face_px: 1
-
-  tracker: "bytetrack"
-  tracker_config: "models/tracker/bytetrack.yaml"
-
+  tracker: bytetrack
+  tracker_config: models/tracker/bytetrack.yaml
 pipeline:
-  device: "cpu"              # Auto-detected or set via VMS_DEVICE env var
-  backend: "onnx"            # onnx, tensorrt, openvino, tflite - auto-detected or set via VMS_BACKEND
-  skip_frames: 2              # detect every 2 frames (fast enough now)
+  device: cuda:0
+  backend: onnx
+  skip_frames: 2
   face_every_n: 3
   max_tracks: 50
-
-# GPU-specific settings (optional)
 gpu:
-  enabled: true              # Enable GPU acceleration when available
-  vram_threshold_gb: 2.0    # Minimum VRAM to use GPU
-  tensorrt_fp16: true        # Use FP16 precision for TensorRT (faster, less memory)
-  tensorrt_int8: false       # Use INT8 quantization (faster, even less memory, needs calibration)
-
-# ── Door Intelligence Engine (polygon FSM) ────────────────────────────────────
-# PRIMARY entry/exit engine (replaces the virtual line).
+  enabled: true
+  vram_threshold_gb: 2.0
+  tensorrt_fp16: true
+  tensorrt_int8: false
 door_intelligence:
   enabled: true
-  camera_id: "office_entrance"
-  probe: "foot"                 # foot = bbox bottom-center (recommended)
-  zones_path: "config/zones.yaml"  # region polygons (normalized 0-1)
-  min_track_frames: 5           # warm-up frames before a track can fire
-  min_dwell_door_sec: 0.15      # min time in the corridor before crossing counts
-  min_inside_frames: 3          # stable frames inside before ENTRY fires
-  min_outside_frames: 3         # stable frames outside before EXIT fires
-  lock_after_event: false       # allow same person to enter/exit freely
-  motion_toward_inside_dot: 0.25   # Kalman velocity · inward normal ≥ this → inward
-  motion_outward_dot: 0.25         # ≤ -this → outward
-  peek_max_inside_sec: 1.5      # peek-out-and-back no-event window
-  uturn_max_door_sec: 3.0       # loiter in corridor past this → back to OUTSIDE
-  min_event_confidence: 0.70    # events below this confidence are dropped
-  purge_after_sec: 10.0         # drop stale tracks from FSM memory
-
-# ── Real-time event stream (replaces CSV on the hot path) ─────────────────────
+  camera_id: office_entrance
+  probe: foot
+  zones_path: config/zones.yaml
+  min_track_frames: 5
+  min_dwell_door_sec: 0.15
+  min_inside_frames: 3
+  min_outside_frames: 3
+  lock_after_event: false
+  motion_toward_inside_dot: 0.25
+  motion_outward_dot: 0.25
+  peek_max_inside_sec: 1.5
+  uturn_max_door_sec: 3.0
+  min_event_confidence: 0.7
+  purge_after_sec: 10.0
 redis:
   enabled: true
-  url: "redis://localhost:6379/0"
-  stream: "attendance:events"
+  url: redis://localhost:6379/0
+  stream: attendance:events
   maxlen: 10000
-  fallback_path: "data/db/events_redis_fallback.jsonl"   # used if Redis is down
-
-# Virtual door SEGMENT (normalized 0–1 of frame width/height)
-# Legacy line engine — FALLBACK only while door_intelligence.enabled: false.
-# Camera is INSIDE looking at the door. Door threshold at y=0.55 (middle of frame).
-# People enter by walking from outside (through door) INTO room (toward camera).
-# Crossing is only counted when the person's FEET project onto this segment —
-# walking past left/right of the door does NOT fire entry/exit.
+  fallback_path: data/db/events_redis_fallback.jsonl
 entry_exit:
   line:
-    x1: 0.20    # left edge of door opening
-    y1: 0.55    # door threshold (middle of frame, where ground meets door)
-    x2: 0.80    # right edge of door opening
-    y2: 0.55    # same height → horizontal line
-  entry_direction: "B_to_A"   # B→A = entry (outside above → inside below)
-  debounce_sec: 1.5           # min seconds between events for same identity
-  min_track_frames: 5         # warm-up frames before a crossing can fire
-  hysteresis_px: 14           # must go this many px past the line to commit side
-  use_foot_point: true        # use bbox bottom-center (feet), not body centroid
-  segment_pad: 0.12           # allow slight overshoot past door edges (fraction)
-  require_committed_zone: true  # previous side must be deep before reverse fires
-
-# ── Identity Fusion & Re-ID ───────────────────────────────────────────────────
-# Resolves "same person, different track IDs" into persistent global ids.
-# Signal priority: gallery name > face embedding > person-ReID > HSV histogram.
+    x1: 0.2
+    y1: 0.55
+    x2: 0.8
+    y2: 0.55
+  entry_direction: B_to_A
+  debounce_sec: 1.5
+  min_track_frames: 5
+  hysteresis_px: 14
+  use_foot_point: true
+  segment_pad: 0.12
+  require_committed_zone: true
 identity_fusion:
   enabled: true
-  max_stitch_dist_px: 60          # spatial window to stitch expired tracks (px)
-  max_stitch_time_sec: 2.0        # temporal window to stitch expired tracks (s)
-  embedding_match_threshold: 0.42 # ArcFace cosine threshold for face Re-ID
-  appearance_match_threshold: 0.85  # HSV body-histogram cosine threshold for no-face Re-ID
-  # ── Optional clothing-invariant person-ReID (OSNet-style, scripted/traced .pt) ──
-  # Leave "" to keep the HSV fallback. Also accepted under models.person_reid_weights.
-  person_reid_weights: ""         # e.g. "models/reid/osnet_scripted.pt"
-  reid_match_threshold: 0.82      # cosine threshold for person-ReID embeddings
-  reid_every_n: 1                 # extract a reid embedding every N frames
-  max_pool_embeddings: 8          # embeddings kept per identity (lighting views)
-  state_path: "data/db/identity_state.json"  # persisted Guest counter + Re-ID pools
-
-# ── Auto-Adjusting Virtual Boundary ───────────────────────────────────────────
-# OPT-IN. Learns a new line from trajectory flow and replaces the manual
-# entry_exit line when confident. In testing it was unreliable (noise can
-# drag the line off the door and invert entry/exit semantics), so it is OFF
-# by default: the configured entry_exit line below is used as-is, which is
-# deterministic. Turn ON only if your camera geometry demands it.
+  max_stitch_dist_px: 60
+  max_stitch_time_sec: 2.0
+  embedding_match_threshold: 0.42
+  appearance_match_threshold: 0.85
+  person_reid_weights: ''
+  reid_match_threshold: 0.82
+  reid_every_n: 1
+  max_pool_embeddings: 8
+  state_path: data/db/identity_state.json
 auto_boundary:
   enabled: false
-  min_tracks_for_learning: 40     # trajectories needed before boundary activates
-  adaptation_rate: 0.05           # EMA smoothing step once learned
+  min_tracks_for_learning: 40
+  adaptation_rate: 0.05
   smoothing: true
-
-# ── Spatial-Temporal Knowledge Reasoning ──────────────────────────────────────
 reasoning:
   enabled: true
-  window_bias: false              # OPT-IN: time-of-day direction override while
-                                  # the boundary is uncalibrated. Keep OFF so
-                                  # entries always produce check-ins.
-  morning_window: ["07:00", "11:00"]   # used only if window_bias: true
-  evening_window: ["16:00", "20:00"]   # used only if window_bias: true
-  uturn_sec: 3.0                       # U-turn / loitering void window
-  tailgate_sec: 2.0                    # anti-tailgating alert window
-
-# ── Automated Attendance ──────────────────────────────────────────────────────
+  window_bias: false
+  morning_window:
+  - 07:00
+  - '11:00'
+  evening_window:
+  - '16:00'
+  - '20:00'
+  uturn_sec: 3.0
+  tailgate_sec: 2.0
 attendance:
   enabled: true
-  db_path: "data/db/attendance.db"
-  shift_start: "09:00"
-  shift_end: "17:00"
+  db_path: data/db/attendance.db
+  shift_start: 09:00
+  shift_end: '17:00'
   late_threshold_mins: 15
   early_exit_mins: 15
-  debounce_minutes: 2.0           # per-person multi-track dedup window
-
+  debounce_minutes: 2.0
 events:
-  db_path: "data/db/events.db"
-  faces_db_path: "data/db/faces.db"
-  snapshots_dir: "data/snapshots"
+  db_path: data/db/events.db
+  faces_db_path: data/db/faces.db
+  snapshots_dir: data/snapshots
   save_snapshots: true
-
 overlay:
   show_person_box: true
   show_face_box: true
   show_labels: true
-  show_boundary: true             # draw the learned dynamic boundary line
+  show_boundary: true
   pulse_frames: 10
   hud: true
-
 gallery:
-  images_dir: "data/faces_gallery"
+  images_dir: data/faces_gallery
