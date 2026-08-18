@@ -24,13 +24,11 @@
         </div>
         <!-- Video Placeholder -->
         <div class="flex-1 relative bg-black overflow-hidden flex items-center justify-center">
-            <div id="video-placeholder" class="text-center">
+            <img id="live-stream" class="w-full h-full object-contain" src="/video_feed" alt="Live Feed" onerror="this.style.display='none';document.getElementById('video-placeholder').style.display='block'"/>
+            <div id="video-placeholder" class="text-center" style="display:none">
                 <span class="material-symbols-outlined text-[64px] text-outline/40">videocam</span>
                 <p class="text-on-surface-variant font-body-sm mt-2">{{ "Streaming..." if pipeline_running else "Pipeline stopped" }}</p>
                 <p class="text-outline font-data-mono text-[11px] mt-1">Start pipeline to see live feed</p>
-            </div>
-            <div id="video-frame" class="hidden absolute inset-0">
-                <img id="live-frame" class="w-full h-full object-contain" alt="Live Feed"/>
             </div>
             <!-- Timestamp overlay -->
             <div class="absolute bottom-4 left-4 font-data-mono text-data-mono text-on-surface bg-surface-container-highest/80 backdrop-blur px-2 py-1 rounded border border-outline-variant">
@@ -60,12 +58,12 @@
 async function startPipeline() {
     const r = await apiCall('/api/pipeline/start', 'POST', {});
     showToast(r.message || r.error, r.ok ? 'success' : 'error');
-    setTimeout(() => location.reload(), 1000);
+    setTimeout(() => location.reload(), 2000);
 }
 async function stopPipeline() {
     const r = await apiCall('/api/pipeline/stop', 'POST', {});
     showToast(r.message || r.error, r.ok ? 'success' : 'error');
-    setTimeout(() => location.reload(), 1000);
+    setTimeout(() => location.reload(), 2000);
 }
 async function refreshLiveEvents() {
     try {
@@ -92,7 +90,20 @@ async function refreshLiveEvents() {
         `).join('');
     } catch(e) {}
 }
+async function refreshPipelineStatus() {
+    try {
+        const r = await fetch('/api/pipeline/status');
+        const s = await r.json();
+        const badge = document.querySelector('.animate-pulse');
+        const liveLabel = badge ? badge.parentElement : null;
+        if (liveLabel) {
+            badge.className = `w-1.5 h-1.5 bg-error rounded-full ${s.running ? 'animate-pulse' : ''}`;
+            liveLabel.childNodes[2].textContent = s.running ? ' LIVE' : ' OFFLINE';
+        }
+    } catch(e) {}
+}
 setInterval(refreshLiveEvents, 3000);
+setInterval(refreshPipelineStatus, 3000);
 refreshLiveEvents();
 function updateTimestamp() {
     const el = document.getElementById('live-timestamp');

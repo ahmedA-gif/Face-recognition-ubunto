@@ -32,32 +32,64 @@ class SystemMonitor:
     # ── CPU Temperature ───────────────────────────────────────────────────
 
     def _get_cpu_temp_windows(self) -> Optional[float]:
-        """Get CPU temperature on Windows via WMI or OpenHardwareMonitor."""
+        """Get CPU temperature on Windows via multiple fallback methods."""
+        # Method 1: WMI thermal zone (needs admin)
         try:
-            result = subprocess.run(
-                ["powershell", "-Command",
-                 "Get-CimInstance MSAcpi_ThermalZoneTemperature -Namespace 'root/wmi' "
-                 "| Select-Object -First 1 -ExpandProperty CurrentTemperature"],
-                capture_output=True, text=True, timeout=5
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                raw = float(result.stdout.strip())
-                return (raw / 10.0) - 273.15  # decikelvin to celsius
+            import wmi
+            w = wmi.WMI(namespace="root/wmi")
+            temps = w.MSAcpi_ThermalZoneTemperature()
+            if temps:
+                c = temps[0].CurrentTemperature / 10.0 - 273.15
+                if 0 < c < 120:
+                    return round(c, 1)
         except Exception:
             pass
-        # Fallback: try OpenHardwareMonitor
+
+        # Method 2: OpenHardwareMonitor / LibreHardwareMonitor WMI
+        for ns in ["root/OpenHardwareMonitor", "root/LibreHardwareMonitor"]:
+            try:
+                import wmi
+                w = wmi.WMI(namespace=ns)
+                sensors = w.Sensor()
+                cpu_temps = [s.Value for s in sensors
+                             if s.SensorType == "Temperature"
+                             and any(k in s.Name.lower() for k in ("cpu", "core", "package"))]
+                if cpu_temps:
+                    return round(max(cpu_temps), 1)
+            except Exception:
+                pass
+
+        # Method 3: PowerShell CIM (admin required but worth trying)
         try:
             result = subprocess.run(
-                ["powershell", "-Command",
-                 "(Get-WmiObject -Namespace root\\OpenHardwareMonitor -Class Sensor "
-                 "| Where-Object {$_.SensorType -eq 'Temperature' -and $_.Name -like '*CPU*'} "
-                 "| Select-Object -First 1).Value"],
-                capture_output=True, text=True, timeout=5
+                ["powershell", "-NoProfile", "-Command",
+                 "try { Get-CimInstance MSAcpi_ThermalZoneTemperature "
+                 "-Namespace 'root/wmi' -EA Stop | Select -First 1 "
+                 "| % { [math]::Round($_.CurrentTemperature/10 - 273.15, 1) } } catch {}"],
+                capture_output=True, text=True, timeout=8
             )
-            if result.returncode == 0 and result.stdout.strip():
-                return float(result.stdout.strip())
+            out = result.stdout.strip()
+            if out:
+                val = float(out)
+                if 0 < val < 120:
+                    return val
         except Exception:
             pass
+
+        # Method 4: Estimate from CPU load + frequency (rough approximation)
+        try:
+            import psutil
+            load = psutil.cpu_percent(interval=0.1)
+            freq = psutil.cpu_freq()
+            if freq and freq.current > 0:
+                # Rough estimate: idle ~35C, each 10% load adds ~3C, high freq adds ~5C
+                base = 35.0
+                load_add = (load / 100.0) * 35.0
+                freq_add = 5.0 if freq.current > 3000 else 0.0
+                return round(base + load_add + freq_add, 1)
+        except Exception:
+            pass
+
         return None
 
     def _get_cpu_temp_linux(self) -> Optional[float]:

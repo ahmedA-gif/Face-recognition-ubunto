@@ -73,6 +73,24 @@ _events_lock = threading.Lock()
 _snapshots_dir = ROOT / "data" / "snapshots"
 _snapshots_dir.mkdir(parents=True, exist_ok=True)
 
+# ─── Frame buffer for MJPEG streaming ───────────────────────────────────────
+import cv2
+import numpy as np
+_frame_buffer: Optional[np.ndarray] = None
+_frame_lock = threading.Lock()
+_frame_quality = 60  # JPEG quality 1-100
+
+
+def _set_frame(frame: np.ndarray) -> None:
+    global _frame_buffer
+    with _frame_lock:
+        _frame_buffer = frame.copy()
+
+
+def _get_frame() -> Optional[np.ndarray]:
+    with _frame_lock:
+        return _frame_buffer.copy() if _frame_buffer is not None else None
+
 
 def _get_config() -> dict:
     global _current_config
@@ -103,6 +121,7 @@ def _get_attendance_db() -> AttendanceDB:
 # ─── Pipeline Thread ──────────────────────────────────────────────────────────
 
 def _pipeline_worker(source_override: Optional[str] = None):
+    """Run pipeline in background thread, capture frames for MJPEG streaming."""
     global _pipeline_running, _pipeline_status
     _pipeline_running = True
     _pipeline_status["running"] = True
@@ -110,9 +129,7 @@ def _pipeline_worker(source_override: Optional[str] = None):
     _pipeline_status["start_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     try:
-        from src.pipeline.runner import run_pipeline
         cfg = load_settings()
-
         if _gpu_mode:
             cfg["pipeline"]["device"] = "cuda:0"
         else:
@@ -121,22 +138,116 @@ def _pipeline_worker(source_override: Optional[str] = None):
         source = source_override or cfg["camera"]["source"]
         _pipeline_status["source"] = str(source)
 
-        while not _pipeline_stop_event.is_set():
-            try:
-                result = run_pipeline(
-                    cfg,
-                    source_override=source,
-                    display=False,
-                    max_frames=None,
-                )
-                _pipeline_status["frames"] = result.frames_processed
-                _pipeline_status["events"] = result.events_count
-            except Exception as e:
-                _pipeline_status["error"] = str(e)
-                if not _pipeline_stop_event.is_set():
-                    time.sleep(5)
-                    continue
-            break
+        from src.capture.stream import CameraStream
+        from src.detection.person_yolo import PersonDetector
+        from src.tracking.bytetrack import ByteTracker
+        from src.recognition.face_engine import FaceEngine
+        from src.recognition.gallery import FaceGallery
+        from src.events.crossing_line import CrossingLineEngine
+        from src.events.store import EventsStore
+        from src.overlay.draw import OverlayRenderer
+        from src.utils.config import load_zones
+        from src.utils.assign import attach_faces_to_tracks
+        from src.attendance.db import AttendanceDB
+        from src.attendance.manager import AttendanceManager
+        import numpy as np
+
+        m = cfg["models"]
+        pipe = cfg["pipeline"]
+        ee = cfg["entry_exit"]
+        ev = cfg["events"]
+        ov = cfg["overlay"]
+
+        skip_frames = int(pipe.get("skip_frames", 2))
+        face_every_n = int(pipe.get("face_every_n", 3))
+
+        # Build components
+        backend = pipe.get("backend", "onnx")
+        detector = PersonDetector(
+            weights=m.get("yolo_onnx", m["yolo_weights"]),
+            conf=m["yolo_conf"], iou=m["yolo_iou"], imgsz=m["yolo_imgsz"],
+            device=pipe["device"], person_class_id=m["person_class_id"], backend=backend,
+        )
+        tracker = ByteTracker()
+        face_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if "cuda" in str(pipe["device"]) else None
+        face_engine = FaceEngine(root=m["face_root"], pack=m["face_pack"],
+                                det_size=tuple(m["face_det_size"]), providers=face_providers)
+        gallery = FaceGallery(db_path=ev["faces_db_path"], match_threshold=m["face_match_threshold"], backend="faiss")
+        store = EventsStore(db_path=ev["db_path"])
+
+        cl = cfg.get("crossing_line") or ee.get("crossing_line") or {}
+        def _l2t(line):
+            if isinstance(line, dict): return (float(line["x1"]), float(line["y1"]), float(line["x2"]), float(line["y2"]))
+            return tuple(line) if isinstance(line, (list, tuple)) else (0.25, 0.75, 0.75, 0.75)
+        event_engine = CrossingLineEngine(
+            line_norm=_l2t(cl.get("line", ee.get("line", (0.25, 0.75, 0.75, 0.75)))),
+            entry_direction=cl.get("entry_direction", "downward"),
+            camera_id=cl.get("camera_id", "cam_01"),
+            min_track_frames=cl.get("min_track_frames", 3),
+            cooldown_sec=cl.get("cooldown_sec", 2.0),
+            min_crossing_gap_sec=cl.get("min_crossing_gap_sec", 1.0),
+        )
+        overlay = OverlayRenderer(pulse_frames=ov["pulse_frames"], hud=ov["hud"], show_boundary=bool(ov.get("show_boundary", True)))
+        _line_t = event_engine.line_norm
+        overlay.set_boundary({"x1": _line_t[0], "y1": _line_t[1], "x2": _line_t[2], "y2": _line_t[3]}, label="BOUNDARY")
+
+        att = cfg.get("attendance", {})
+        att_db = AttendanceDB(db_path=att.get("db_path", "data/db/attendance.db")) if att.get("enabled") else None
+        attendance = AttendanceManager(db=att_db, shift_start=att.get("shift_start", "09:00"),
+            shift_end=att.get("shift_end", "17:00"), late_threshold_mins=att.get("late_threshold_mins", 15),
+            early_exit_mins=att.get("early_exit_mins", 15), debounce_minutes=att.get("debounce_minutes", 2.0)) if att_db else None
+
+        frames_processed = 0
+        total_events = 0
+        last_dets = []
+        last_faces = []
+
+        with CameraStream(source=source, buffer_size=cfg["camera"].get("buffer_size", 1),
+                          width=cfg["camera"].get("width"), height=cfg["camera"].get("height")) as stream:
+            while not _pipeline_stop_event.is_set():
+                ok, frame = stream.read()
+                if not ok or frame is None:
+                    if frames_processed == 0:
+                        _pipeline_status["error"] = "Could not read frame from source"
+                    break
+
+                frames_processed += 1
+                run_det = (frames_processed - 1) % max(1, skip_frames) == 0
+                run_face = (frames_processed - 1) % max(1, face_every_n) == 0
+
+                if run_det:
+                    last_dets = detector.detect(frame)
+                tracks = tracker.update(last_dets)
+
+                if run_face:
+                    last_faces = face_engine.detect_and_embed(frame, min_face_px=m.get("min_face_px", 1))
+                if last_faces:
+                    attach_faces_to_tracks(tracks, last_faces, gallery.match)
+
+                events = event_engine.update(tracks, frame.shape, store)
+                if events:
+                    total_events += len(events)
+                    _snap_dir = Path(ev.get("snapshots_dir", "data/snapshots"))
+                    _snap_dir.mkdir(parents=True, exist_ok=True)
+                    for e in events:
+                        try:
+                            snap_name = f"{e.date}_{e.time.replace(':', '-')}_{e.track_id}_{e.direction}.jpg"
+                            cv2.imwrite(str(_snap_dir / snap_name), frame)
+                            e.snapshot_path = str(_snap_dir / snap_name)
+                        except Exception:
+                            pass
+                    for e in events:
+                        person = e.person or "Unknown"
+                        print(f"[EVENT] {e.date} {e.time} | {person} | {e.direction} conf={e.confidence:.2f}")
+                        if attendance is not None:
+                            attendance.process_events([e])
+
+                vis = overlay.draw(frame, tracks, last_faces, event_engine.counts)
+                _set_frame(vis)
+
+                _pipeline_status["frames"] = frames_processed
+                _pipeline_status["events"] = total_events
+
     except Exception as e:
         _pipeline_status["error"] = f"Fatal: {e}\n{traceback.format_exc()}"
     finally:
@@ -334,6 +445,35 @@ def settings():
 
 
 # ─── API Routes ───────────────────────────────────────────────────────────────
+
+# ─── MJPEG Video Stream ──────────────────────────────────────────────────────
+
+@app.route("/video_feed")
+def video_feed():
+    """MJPEG stream endpoint for live video in browser."""
+    from flask import Response
+    import time as _time
+
+    def generate():
+        while True:
+            frame = _get_frame()
+            if frame is not None:
+                _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, _frame_quality])
+                yield (b"--frame\r\n"
+                       b"Content-Type: image/jpeg\r\n\r\n"
+                       + buffer.tobytes() + b"\r\n")
+            else:
+                # Send a blank frame when no pipeline running
+                blank = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(blank, "No Signal", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (60, 60, 60), 2)
+                _, buffer = cv2.imencode(".jpg", blank, [cv2.IMWRITE_JPEG_QUALITY, 30])
+                yield (b"--frame\r\n"
+                       b"Content-Type: image/jpeg\r\n\r\n"
+                       + buffer.tobytes() + b"\r\n")
+            _time.sleep(0.033)  # ~30fps
+
+    return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
 
 @app.route("/api/pipeline/start", methods=["POST"])
 def api_pipeline_start():
