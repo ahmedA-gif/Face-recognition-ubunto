@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Tracking - VisionAttend AI{% endblock %}
+{% block page_title %}Tracking{% endblock %}
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-6">
+        <h3 class="font-headline-md text-headline-md font-semibold text-on-surface mb-4">Pipeline Status</h3>
+        <div class="space-y-4">
+            <div class="flex justify-between items-center py-2 border-b border-outline-variant/30">
+                <span class="text-on-surface-variant">Status</span>
+                <span class="font-data-mono text-data-mono {{ 'text-secondary' if status.running else 'text-outline' }}">
+                    {{ 'RUNNING' if status.running else 'STOPPED' }}
+                </span>
+            </div>
+            <div class="flex justify-between items-center py-2 border-b border-outline-variant/30">
+                <span class="text-on-surface-variant">Frames Processed</span>
+                <span class="font-data-mono text-data-mono text-on-surface">{{ status.frames }}</span>
+            </div>
+            <div class="flex justify-between items-center py-2 border-b border-outline-variant/30">
+                <span class="text-on-surface-variant">Events Detected</span>
+                <span class="font-data-mono text-data-mono text-on-surface">{{ status.events }}</span>
+            </div>
+            <div class="flex justify-between items-center py-2 border-b border-outline-variant/30">
+                <span class="text-on-surface-variant">Source</span>
+                <span class="font-data-mono text-[11px] text-on-surface-variant truncate max-w-[200px]">{{ status.source or 'N/A' }}</span>
+            </div>
+            <div class="flex justify-between items-center py-2">
+                <span class="text-on-surface-variant">Started</span>
+                <span class="font-data-mono text-[11px] text-on-surface-variant">{{ status.start_time or 'N/A' }}</span>
+            </div>
+        </div>
+    </div>
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-6">
+        <h3 class="font-headline-md text-headline-md font-semibold text-on-surface mb-4">Live Tracks</h3>
+        <div class="text-center py-8 text-on-surface-variant">
+            <span class="material-symbols-outlined text-[48px] text-outline/30 block mb-2">location_searching</span>
+            <p class="font-body-sm">Track visualization available when pipeline is running.</p>
+        </div>
+    </div>
+</div>
+{% endblock %}

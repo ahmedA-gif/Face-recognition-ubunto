@@ -57,48 +57,56 @@ def perfect_calibration(camera_id: str = "office_entrance", interactive: bool = 
     print(f"  Camera position: INSIDE looking OUT")
     print(f"  Door threshold: y={int(h * 0.794)} ({h * 0.794:.1%} of height)")
     
-    # Perfect zones for this scene
-    # Based on analysis and the README description
+    # FINAL CORRECT zones - NON-OVERLAPPING
+    # Camera is INSIDE looking OUT through door
+    # Priority: DOOR > INSIDE > OUTSIDE
+    # INSIDE and OUTSIDE must NOT overlap, or OUTSIDE will never be detected
     
-    # OUTSIDE: The area visible through the door (top part)
-    # From README: "Visible outdoor area through the door opening (motorcycle/wall)"
-    # This should be the bright area at the top
+    # OUTSIDE: The door opening (where you see outside world)
+    # This is a rectangle showing the outdoors through the door
     outside = [
-        [0.30, 0.10],   # Top-left of door opening
-        [0.70, 0.10],   # Top-right of door opening
-        [0.70, 0.66],   # Bottom-right of door opening
-        [0.30, 0.66],   # Bottom-left of door opening
+        [0.30, 0.10],
+        [0.70, 0.10],
+        [0.70, 0.66],
+        [0.30, 0.66],
     ]
     
-    # DOOR corridor: The threshold band at the ground
-    # From README: "Threshold band at the bottom of the door opening (ground crossing)"
-    # At y=0.79 (the detected threshold) with some buffer
+    # DOOR corridor: Threshold at floor level
+    # Foot point crosses here: OUTSIDE -> DOOR -> INSIDE = ENTRY
+    #                          INSIDE -> DOOR -> OUTSIDE = EXIT
     door = [
-        [0.25, 0.74],   # Slightly above threshold
-        [0.75, 0.74],   # Slightly above threshold
-        [0.75, 0.85],   # Below threshold (floor)
-        [0.25, 0.85],   # Below threshold (floor)
+        [0.25, 0.66],
+        [0.75, 0.66],
+        [0.75, 0.82],
+        [0.25, 0.82],
     ]
     
-    # INSIDE: The room interior
-    # From README: "Room interior — concave polygon wrapping around the door opening"
-    # This wraps AROUND the OUTSIDE and DOOR, covering the walls and floor
-    # The polygon goes: left wall -> left of OUTSIDE -> below OUTSIDE -> below DOOR -> right of DOOR -> right wall -> ceiling -> back to start
+    # INSIDE: Room interior - does NOT include OUTSIDE
+    # This has 3 parts: left wall, ceiling+right wall, floor
+    # Connected: left wall -> ceiling -> right wall -> floor -> left of door -> back to left wall
     inside = [
-        [0.00, 0.00],    # Top-left corner (ceiling left)
-        [0.30, 0.00],    # Top-left of OUTSIDE area (ceiling)
-        [0.30, 0.10],    # Top-left of OUTSIDE (left wall top)
-        [0.30, 0.66],    # Bottom-left of OUTSIDE (left wall bottom, meets DOOR)
-        [0.25, 0.66],    # Left edge of DOOR corridor
-        [0.25, 0.85],    # Bottom-left of DOOR corridor (floor left)
-        [0.75, 0.85],    # Bottom-right of DOOR corridor (floor right)
-        [0.75, 0.66],    # Right edge of DOOR corridor
-        [0.70, 0.66],    # Bottom-right of OUTSIDE (right wall bottom)
-        [0.70, 0.10],    # Top-right of OUTSIDE (right wall top)
-        [0.70, 0.00],    # Top-right of OUTSIDE area (ceiling)
-        [1.00, 0.00],    # Top-right corner (ceiling right)
-        [1.00, 1.00],    # Bottom-right corner (floor right)
-        [0.00, 1.00],    # Bottom-left corner (floor left)
+        # Part 1: Left wall area (left of OUTSIDE)
+        [0.00, 0.00],    # Top-left corner
+        [0.30, 0.00],    # Ceiling edge (left of OUTSIDE)
+        [0.30, 0.10],    # Top-left of OUTSIDE (corner)
+        [0.30, 0.66],    # Bottom-left of OUTSIDE (corner)
+        
+        # Part 2: Below DOOR (floor area)
+        [0.25, 0.66],    # Top-left of DOOR
+        [0.25, 0.82],    # Bottom-left of DOOR
+        [0.00, 0.82],    # Floor left
+        [0.00, 1.00],    # Bottom-left corner
+        
+        # Part 3: Right wall + ceiling (right of OUTSIDE)
+        [1.00, 1.00],    # Bottom-right corner
+        [1.00, 0.82],    # Floor right
+        [0.75, 0.82],    # Bottom-right of DOOR
+        [0.75, 0.66],    # Top-right of DOOR
+        [0.70, 0.66],    # Bottom-right of OUTSIDE
+        [0.70, 0.10],    # Top-right of OUTSIDE
+        [0.70, 0.00],    # Ceiling edge (right of OUTSIDE)
+        [1.00, 0.00],    # Top-right corner
+        [1.00, 0.00],    # Closing point (will be removed by clean_polygon)
     ]
     
     zones = {

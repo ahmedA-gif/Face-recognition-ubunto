@@ -97,16 +97,15 @@ YOLOV10_MODELS = {
 }
 
 YOLOV11_MODELS = {
-    "yolo11n": "https://github.com/ultralytics/assets/releases/download/v11.1/yolo11n.pt",
-    "yolo11s": "https://github.com/ultralytics/assets/releases/download/v11.1/yolo11s.pt",
-    "yolo11m": "https://github.com/ultralytics/assets/releases/download/v11.1/yolo11m.pt",
-    "yolo11l": "https://github.com/ultralytics/assets/releases/download/v11.1/yolo11l.pt",
-    "yolo11x": "https://github.com/ultralytics/assets/releases/download/v11.1/yolo11x.pt",
+    "yolo11n": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt",
+    "yolo11s": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s.pt",
+    "yolo11m": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11m.pt",
+    "yolo11l": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11l.pt",
+    "yolo11x": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11x.pt",
 }
 
 FACE_MODELS = {
-    "buffalo_s": "https://github.com/naeheon/insightface_pytorch/releases/download/v0.1/buffalo_s.zip",
-    "buffalo_l": "https://github.com/naeheon/insightface_pytorch/releases/download/v0.1/buffalo_l.zip",
+    "buffalo_l": "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip",
 }
 
 # Hardware to YOLO model mapping
@@ -176,16 +175,8 @@ def print_header(msg: str) -> None:
 
 def command_exists(cmd: str) -> bool:
     """Check if a command exists in PATH."""
-    try:
-        subprocess.run(
-            ["which", cmd],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=True,
-        )
-        return True
-    except subprocess.CalledProcessError:
-        return False
+    import shutil
+    return shutil.which(cmd) is not None
 
 
 def detect_nvidia_gpu() -> Tuple[bool, int]:
@@ -322,13 +313,15 @@ def download_file(url: str, dest: Path, max_retries: int = 3, timeout: int = 60)
                         for chunk in response.iter_content(chunk_size=8192):
                             f.write(chunk)
                     
-                    tmp_path.replace(dest)
+                    shutil.copy2(tmp_path, dest)
+                    tmp_path.unlink(missing_ok=True)
                     print_success(f"Downloaded {dest.name}")
                     return True
                 except ImportError:
                     # Fallback to urllib
                     urlretrieve(url, tmp_path, reporthook=lambda b, bs, ts: None)
-                    tmp_path.replace(dest)
+                    shutil.copy2(tmp_path, dest)
+                    tmp_path.unlink(missing_ok=True)
                     print_success(f"Downloaded {dest.name}")
                     return True
                     
@@ -397,7 +390,7 @@ def create_model_registry() -> None:
         print_warning("No YOLO models found")
         return
     
-    for model_file in YOLO_DIR.glob("*.onnx") + YOLO_DIR.glob("*.pt"):
+    for model_file in list(YOLO_DIR.glob("*.onnx")) + list(YOLO_DIR.glob("*.pt")):
         model_name = model_file.stem
         model_dir = MODEL_DIR / model_name
         model_dir.mkdir(parents=True, exist_ok=True)
@@ -671,6 +664,27 @@ def main() -> None:
             print_info(f"Extracting {face_name}...")
             if extract_zip(zip_dest, FACE_DIR):
                 print_success(f"Installed: {face_name}")
+
+    # Auto-download buffalo_s via insightface if not present
+    buffalo_s_dir = FACE_DIR / "buffalo_s"
+    if not buffalo_s_dir.exists():
+        print_info("Downloading buffalo_s via insightface (auto-download)...")
+        try:
+            from insightface.app import FaceAnalysis
+            import shutil as _shutil
+            tmp_face = FACE_DIR / "_tmp_buffalo_s"
+            app = FaceAnalysis(name="buffalo_s", root=str(tmp_face))
+            # Move from insightface cache to our models dir
+            cached = tmp_face / "models" / "buffalo_s"
+            if cached.exists():
+                _shutil.copytree(cached, buffalo_s_dir)
+                _shutil.rmtree(tmp_face, ignore_errors=True)
+                print_success("Installed: buffalo_s (via insightface auto-download)")
+            else:
+                _shutil.rmtree(tmp_face, ignore_errors=True)
+                print_warning("buffalo_s auto-download did not produce expected files")
+        except Exception as e:
+            print_warning(f"buffalo_s auto-download failed: {e}")
     
     # =========================================================================
     # CREATE MODEL REGISTRY

@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - VisionAttend AI{% endblock %}
+{% block page_title %}Overview{% endblock %}
+{% block content %}
+<div class="mb-6 flex justify-between items-end">
+    <div>
+        <h2 class="font-headline-lg text-headline-lg font-semibold text-on-surface tracking-tight">Overview</h2>
+        <p class="font-body-md text-body-md text-on-surface-variant mt-1">System Health & Live Metrics</p>
+    </div>
+    <div class="font-data-mono text-data-mono text-on-surface-variant flex items-center gap-2 bg-surface-container px-3 py-1.5 rounded border border-outline-variant/50">
+        <span class="material-symbols-outlined text-[16px]">calendar_today</span>
+        <span id="current-datetime"></span>
+    </div>
+</div>
+
+<!-- KPI Cards -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-lg">
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-3 card-hover transition-all">
+        <div class="flex justify-between items-start mb-2">
+            <span class="font-label-caps text-label-caps text-on-surface-variant uppercase">Present Today</span>
+            <span class="material-symbols-outlined text-primary text-[20px]">person_check</span>
+        </div>
+        <div class="flex items-end justify-between">
+            <span class="font-display text-display font-bold text-on-surface" id="kpi-present">{{ present_count }}</span>
+        </div>
+    </div>
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-3 card-hover transition-all">
+        <div class="flex justify-between items-start mb-2">
+            <span class="font-label-caps text-label-caps text-on-surface-variant uppercase">Entries</span>
+            <span class="material-symbols-outlined text-secondary text-[20px]">login</span>
+        </div>
+        <div class="flex items-end justify-between">
+            <span class="font-display text-display font-bold text-on-surface" id="kpi-entries">{{ entry_count }}</span>
+        </div>
+    </div>
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-3 card-hover transition-all">
+        <div class="flex justify-between items-start mb-2">
+            <span class="font-label-caps text-label-caps text-on-surface-variant uppercase">Exits</span>
+            <span class="material-symbols-outlined text-tertiary text-[20px]">logout</span>
+        </div>
+        <div class="flex items-end justify-between">
+            <span class="font-display text-display font-bold text-on-surface" id="kpi-exits">{{ exit_count }}</span>
+        </div>
+    </div>
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-3 card-hover transition-all">
+        <div class="flex justify-between items-start mb-2">
+            <span class="font-label-caps text-label-caps text-on-surface-variant uppercase">People Registered</span>
+            <span class="material-symbols-outlined text-primary text-[20px]">group</span>
+        </div>
+        <div class="flex items-end justify-between">
+            <span class="font-display text-display font-bold text-on-surface">{{ people_count }}</span>
+        </div>
+    </div>
+</div>
+
+<!-- Pipeline Control + System Status -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-lg">
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-4">
+        <h3 class="font-headline-md text-headline-md font-semibold text-on-surface mb-4">Pipeline Control</h3>
+        <div class="flex items-center gap-4 mb-4">
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full {% if pipeline_running %}bg-secondary animate-pulse{% else %}bg-outline{% endif %}"></span>
+                <span class="font-data-mono text-data-mono text-on-surface-variant" id="pipeline-state">{{ "RUNNING" if pipeline_running else "STOPPED" }}</span>
+            </div>
+            <span class="font-data-mono text-[11px] text-outline" id="pipeline-frames">0 frames</span>
+        </div>
+        <div class="flex gap-3">
+            <button onclick="startPipeline()" id="btn-start"
+                class="px-4 py-2 bg-secondary/20 text-secondary border border-secondary/30 rounded font-body-sm font-medium hover:bg-secondary/30 transition-colors flex items-center gap-2">
+                <span class="material-symbols-outlined text-[18px]">play_arrow</span> Start
+            </button>
+            <button onclick="stopPipeline()" id="btn-stop"
+                class="px-4 py-2 bg-error/20 text-error border border-error/30 rounded font-body-sm font-medium hover:bg-error/30 transition-colors flex items-center gap-2">
+                <span class="material-symbols-outlined text-[18px]">stop</span> Stop
+            </button>
+        </div>
+    </div>
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-4">
+        <h3 class="font-headline-md text-headline-md font-semibold text-on-surface mb-4">System Status</h3>
+        <div class="space-y-3">
+            <div class="flex justify-between items-center">
+                <span class="text-on-surface-variant font-body-sm">Compute Mode</span>
+                <div class="flex gap-2">
+                    <button onclick="switchMode('gpu')" id="btn-gpu"
+                        class="px-3 py-1 rounded text-[11px] font-label-caps border transition-colors
+                        {% if gpu_mode %}bg-secondary/20 text-secondary border-secondary/30{% else %}bg-surface-container text-on-surface-variant border-outline-variant{% endif %}">
+                        GPU
+                    </button>
+                    <button onclick="switchMode('cpu')" id="btn-cpu"
+                        class="px-3 py-1 rounded text-[11px] font-label-caps border transition-colors
+                        {% if not gpu_mode %}bg-primary/20 text-primary border-primary/30{% else %}bg-surface-container text-on-surface-variant border-outline-variant{% endif %}">
+                        CPU
+                    </button>
+                </div>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-on-surface-variant font-body-sm">Total Events</span>
+                <span class="font-data-mono text-data-mono text-on-surface">{{ total_events }}</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-on-surface-variant font-body-sm">Registered Faces</span>
+                <span class="font-data-mono text-data-mono text-on-surface">{{ people_count }}</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Events -->
+<div class="bg-surface-container-high border border-outline-variant rounded-lg">
+    <div class="px-4 py-3 border-b border-outline-variant flex justify-between items-center">
+        <h3 class="font-headline-md text-headline-md font-semibold text-on-surface">Recent Events</h3>
+        <a href="/events" class="text-primary text-body-sm hover:underline">View All</a>
+    </div>
+    <div class="divide-y divide-outline-variant/30 max-h-[400px] overflow-y-auto">
+        {% for ev in events_today[:15] %}
+        <div class="px-4 py-3 flex items-center gap-4 hover:bg-surface-container-high/50 transition-colors">
+            <div class="w-2 h-2 rounded-full {% if ev.direction == 'entry' %}bg-secondary{% else %}bg-tertiary{% endif %}"></div>
+            <div class="flex-1 min-w-0">
+                <span class="font-body-sm text-on-surface font-medium">{{ ev.person or 'Unknown' }}</span>
+                <span class="font-label-caps text-[10px] ml-2 px-1.5 py-0.5 rounded
+                    {% if ev.direction == 'entry' %}bg-secondary/10 text-secondary{% else %}bg-tertiary/10 text-tertiary{% endif %}">
+                    {{ ev.direction|upper }}
+                </span>
+            </div>
+            <span class="font-data-mono text-[11px] text-outline whitespace-nowrap">{{ ev.time }}</span>
+        </div>
+        {% else %}
+        <div class="px-4 py-8 text-center text-on-surface-variant font-body-sm">No events today</div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function startPipeline() {
+    const r = await apiCall('/api/pipeline/start', 'POST', {});
+    showToast(r.message || r.error, r.ok ? 'success' : 'error');
+    setTimeout(refreshStatus, 1000);
+}
+async function stopPipeline() {
+    const r = await apiCall('/api/pipeline/stop', 'POST', {});
+    showToast(r.message || r.error, r.ok ? 'success' : 'error');
+    setTimeout(refreshStatus, 1000);
+}
+async function switchMode(mode) {
+    const r = await apiCall('/api/gpu/switch', 'POST', {mode});
+    showToast(r.ok ? `Switched to ${mode.toUpperCase()} mode` : r.error, r.ok ? 'success' : 'error');
+    setTimeout(() => location.reload(), 500);
+}
+async function refreshStatus() {
+    const r = await apiCall('/api/pipeline/status');
+    const stateEl = document.getElementById('pipeline-state');
+    const framesEl = document.getElementById('pipeline-frames');
+    if (stateEl) stateEl.textContent = r.running ? 'RUNNING' : 'STOPPED';
+    if (framesEl) framesEl.textContent = r.frames + ' frames';
+}
+setInterval(refreshStatus, 3000);
+</script>
+{% endblock %}

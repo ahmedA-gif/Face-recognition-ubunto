@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>{% block title %}VisionAttend AI{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-container-highest": "#353436", "on-primary": "#00344d",
+                        "surface-container-high": "#2a2a2b", "error": "#ffb4ab",
+                        "tertiary-container": "#ff6c66", "on-background": "#e5e2e3",
+                        "on-tertiary": "#68000a", "outline": "#88929b",
+                        "surface-bright": "#3a393a", "tertiary-fixed": "#ffdad7",
+                        "on-surface-variant": "#bec8d2", "surface-variant": "#353436",
+                        "primary-container": "#0ea5e9", "outline-variant": "#3e4850",
+                        "on-surface": "#e5e2e3", "on-error": "#690005",
+                        "surface": "#131314", "background": "#131314",
+                        "surface-dim": "#131314", "primary": "#89ceff",
+                        "secondary": "#4edea3", "secondary-container": "#00a572",
+                        "surface-container": "#201f20", "surface-container-low": "#1c1b1c",
+                        "surface-container-lowest": "#0e0e0f",
+                        "error-container": "#93000a",
+                    },
+                    "borderRadius": { "DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px" },
+                    "spacing": { "sidebar_width": "260px", "md": "16px", "gutter": "12px", "sm": "8px", "xs": "4px", "xl": "32px", "lg": "24px" },
+                    "fontFamily": {
+                        "label-caps": ["JetBrains Mono"], "data-mono": ["JetBrains Mono"],
+                        "headline-lg": ["Hanken Grotesk"], "body-md": ["Inter"],
+                        "headline-md": ["Hanken Grotesk"], "display": ["Hanken Grotesk"], "body-sm": ["Inter"]
+                    },
+                    "fontSize": {
+                        "label-caps": ["11px", { "lineHeight": "14px", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "data-mono": ["13px", { "lineHeight": "18px", "fontWeight": "500" }],
+                        "headline-lg": ["28px", { "lineHeight": "36px", "fontWeight": "600" }],
+                        "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "headline-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "display": ["36px", { "lineHeight": "44px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "body-sm": ["12px", { "lineHeight": "16px", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        .icon-fill { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #131314; }
+        ::-webkit-scrollbar-thumb { background: #3e4850; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #88929b; }
+        .nav-active { border-left: 2px solid #89ceff; background: rgba(14,165,233,0.1); color: #89ceff; }
+        .pulse-dot { animation: pulse 2s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+        .card-hover:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+        .transition-all { transition: all 0.2s ease; }
+    </style>
+    {% block head %}{% endblock %}
+</head>
+<body class="bg-background text-on-surface font-body-md min-h-screen flex overflow-hidden">
+    <!-- Sidebar -->
+    <nav class="fixed left-0 h-full w-[260px] flex flex-col border-r border-outline-variant bg-surface-container-low hidden md:flex z-50">
+        <div class="flex items-center gap-3 px-lg py-md h-16 border-b border-outline-variant/30">
+            <div class="h-8 w-8 rounded bg-primary flex items-center justify-center text-on-primary font-headline-md text-sm font-bold">VA</div>
+            <div>
+                <h1 class="font-headline-md text-headline-md font-bold text-primary leading-tight">VisionAttend AI</h1>
+                <p class="font-body-sm text-body-sm text-on-surface-variant">Enterprise Security</p>
+            </div>
+        </div>
+        <div class="flex-1 overflow-y-auto py-md space-y-1">
+            <a class="flex items-center gap-3 px-4 py-2 border-l-2 border-transparent text-on-surface-variant hover:bg-surface-container-high transition-all cursor-pointer {% if request.endpoint == 'dashboard' %}nav-active{% endif %}" href="/">
+                <span class="material-symbols-outlined {% if request.endpoint == 'dashboard' %}icon-fill{% endif %}">dashboard</span>
+                <span class="font-body-md text-body-md">Dashboard</span>
+            </a>
+            <a class="flex items-center gap-3 px-4 py-2 border-l-2 border-transparent text-on-surface-variant hover:bg-surface-container-high transition-all cursor-pointer {% if request.endpoint == 'live' %}nav-active{% endif %}" href="/live">
+                <span class="material-symbols-outlined {% if request.endpoint == 'live' %}icon-fill{% endif %}">videocam</span>
+                <span class="font-body-md text-body-md">Live Monitoring</span>
+            </a>
+            <a class="flex items-center gap-3 px-4 py-2 border-l-2 border-transparent text-on-surface-variant hover:bg-surface-container-high transition-all cursor-pointer {% if request.endpoint == 'attendance' %}nav-active{% endif %}" href="/attendance">
+                <span class="material-symbols-outlined {% if request.endpoint == 'attendance' %}icon-fill{% endif %}">event_available</span>
+                <span class="font-body-md text-body-md">Attendance</span>
+            </a>
+            <a class="flex items-center gap-3 px-4 py-2 border-l-2 border-transparent text-on-surface-variant hover:bg-surface-container-high transition-all cursor-pointer {% if request.endpoint == 'people' %}nav-active{% endif %}" href="/people">
+                <span class="material-symbols-outlined {% if request.endpoint == 'people' %}icon-fill{% endif %}">group</span>
+                <span class="font-body-md text-body-md">People</span>
+            </a>
+            <a class="flex items-center gap-3 px-4 py-2 border-l-2 border-transparent text-on-surface-variant hover:bg-surface-container-high transition-all cursor-pointer {% if request.endpoint == 'cameras' %}nav-active{% endif %}" href="/cameras">
+                <span class="material-symbols-outlined {% if request.endpoint == 'cameras' %}icon-fill{% endif %}">videocam_sensor</span>
+                <span class="font-body-md text-body-md">Cameras</span>
+            </a>
+            <a class="flex items-center gap-3 px-4 py-2 border-l-2 border-transparent text-on-surface-variant hover:bg-surface-container-high transition-all cursor-pointer {% if request.endpoint == 'events' %}nav-active{% endif %}" href="/events">
+                <span class="material-symbols-outlined {% if request.endpoint == 'events' %}icon-fill{% endif %}">notification_important</span>
+                <span class="font-body-md text-body-md">Events</span>
+            </a>
+            <a class="flex items-center gap-3 px-4 py-2 border-l-2 border-transparent text-on-surface-variant hover:bg-surface-container-high transition-all cursor-pointer {% if request.endpoint == 'tracking' %}nav-active{% endif %}" href="/tracking">
+                <span class="material-symbols-outlined {% if request.endpoint == 'tracking' %}icon-fill{% endif %}">location_searching</span>
+                <span class="font-body-md text-body-md">Tracking</span>
+            </a>
+            <a class="flex items-center gap-3 px-4 py-2 border-l-2 border-transparent text-on-surface-variant hover:bg-surface-container-high transition-all cursor-pointer {% if request.endpoint == 'analytics' %}nav-active{% endif %}" href="/analytics">
+                <span class="material-symbols-outlined {% if request.endpoint == 'analytics' %}icon-fill{% endif %}">analytics</span>
+                <span class="font-body-md text-body-md">Analytics</span>
+            </a>
+            <a class="flex items-center gap-3 px-4 py-2 border-l-2 border-transparent text-on-surface-variant hover:bg-surface-container-high transition-all cursor-pointer {% if request.endpoint == 'database' %}nav-active{% endif %}" href="/database">
+                <span class="material-symbols-outlined {% if request.endpoint == 'database' %}icon-fill{% endif %}">database</span>
+                <span class="font-body-md text-body-md">Database</span>
+            </a>
+            <a class="flex items-center gap-3 px-4 py-2 border-l-2 border-transparent text-on-surface-variant hover:bg-surface-container-high transition-all cursor-pointer {% if request.endpoint == 'system' %}nav-active{% endif %}" href="/system">
+                <span class="material-symbols-outlined {% if request.endpoint == 'system' %}icon-fill{% endif %}">memory</span>
+                <span class="font-body-md text-body-md">System</span>
+            </a>
+            <a class="flex items-center gap-3 px-4 py-2 border-l-2 border-transparent text-on-surface-variant hover:bg-surface-container-high transition-all cursor-pointer {% if request.endpoint == 'settings' %}nav-active{% endif %}" href="/settings">
+                <span class="material-symbols-outlined {% if request.endpoint == 'settings' %}icon-fill{% endif %}">settings</span>
+                <span class="font-body-md text-body-md">Settings</span>
+            </a>
+        </div>
+        <div class="mt-auto border-t border-outline-variant/30 py-sm">
+            <div class="flex items-center gap-3 px-4 py-2 text-secondary" id="sidebar-status">
+                <span class="material-symbols-outlined text-[16px]">check_circle</span>
+                <span class="font-body-sm text-body-sm" id="sidebar-status-text">System Online</span>
+            </div>
+            <div class="flex items-center gap-3 px-4 py-2 text-on-surface-variant" id="sidebar-gpu">
+                <span class="material-symbols-outlined text-[16px]">memory</span>
+                <span class="font-body-sm text-body-sm" id="sidebar-gpu-text">GPU Mode</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="flex-1 flex flex-col md:ml-[260px] w-full relative h-screen">
+        <!-- Top Bar -->
+        <header class="flex justify-between items-center w-full px-lg h-16 border-b border-outline-variant bg-surface sticky top-0 z-40">
+            <div class="flex items-center gap-6">
+                <button class="md:hidden text-on-surface-variant p-2 -ml-2 rounded hover:bg-surface-container">
+                    <span class="material-symbols-outlined">menu</span>
+                </button>
+                <div class="flex gap-4">
+                    <span class="font-headline-md text-headline-md font-bold text-primary">{% block page_title %}Dashboard{% endblock %}</span>
+                </div>
+            </div>
+            <div class="flex items-center gap-4">
+                <span id="gpu-badge" class="font-label-caps text-label-caps border px-2 py-0.5 rounded flex items-center gap-1 cursor-default
+                    {% if gpu_mode %}text-secondary border-secondary/30 bg-secondary/10{% else %}text-primary border-primary/30 bg-primary/10{% endif %}">
+                    <span class="w-1.5 h-1.5 rounded-full {% if gpu_mode %}bg-secondary{% else %}bg-primary{% endif %} animate-pulse"></span>
+                    {{ "GPU MODE" if gpu_mode else "CPU MODE" }}
+                </span>
+                <div class="flex items-center gap-2 text-on-surface-variant">
+                    <button class="p-1.5 hover:bg-surface-container rounded transition-colors relative cursor-pointer">
+                        <span class="material-symbols-outlined">notifications</span>
+                    </button>
+                    <button class="p-1.5 hover:bg-surface-container rounded transition-colors cursor-pointer">
+                        <span class="material-symbols-outlined">schedule</span>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Page Content -->
+        <main class="flex-1 overflow-y-auto p-lg bg-background">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2"></div>
+
+    <script>
+        function showToast(msg, type='success') {
+            const c = document.getElementById('toast-container');
+            const colors = { success: 'border-secondary text-secondary', error: 'border-error text-error', info: 'border-primary text-primary' };
+            const t = document.createElement('div');
+            t.className = `bg-surface-container-high border ${colors[type] || colors.info} rounded px-4 py-2 font-body-sm text-body-sm shadow-lg transition-all opacity-0 translate-y-2`;
+            t.textContent = msg;
+            c.appendChild(t);
+            requestAnimationFrame(() => { t.classList.remove('opacity-0','translate-y-2'); });
+            setTimeout(() => { t.classList.add('opacity-0','translate-y-2'); setTimeout(() => t.remove(), 300); }, 3000);
+        }
+
+        async function apiCall(url, method='GET', body=null) {
+            try {
+                const opts = { method, headers: {'Content-Type': 'application/json'} };
+                if (body) opts.body = JSON.stringify(body);
+                const r = await fetch(url, opts);
+                return await r.json();
+            } catch(e) { return {ok: false, error: e.message}; }
+        }
+
+        function updateClock() {
+            const now = new Date();
+            const el = document.getElementById('current-datetime');
+            if (el) el.textContent = now.toLocaleString('en-US', { month:'short', day:'numeric', year:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        async function refreshPipelineStatus() {
+            try {
+                const r = await fetch('/api/pipeline/status');
+                const s = await r.json();
+                const statusEl = document.getElementById('sidebar-status-text');
+                const gpuEl = document.getElementById('sidebar-gpu-text');
+                if (statusEl) statusEl.textContent = s.running ? 'Pipeline Running' : 'System Online';
+                if (gpuEl) gpuEl.textContent = s.gpu_mode ? 'GPU Mode' : 'CPU Mode';
+            } catch(e) {}
+        }
+        setInterval(refreshPipelineStatus, 5000);
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

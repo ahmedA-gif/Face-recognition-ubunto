@@ -204,7 +204,7 @@ class EntryExitEngine:
                 t.last_event_at = now
                 self._last_event_at[key] = now
                 self.counts[direction] = self.counts.get(direction, 0) + 1
-                self.counts["present"] = self.counts.get("entry", 0) - self.counts.get("exit", 0)
+                self.counts["present"] = self.counts.get("present", 0) + (1 if direction == "entry" else -1)
 
                 # Commit the new zone after a successful event.
                 self._zones[key] = zone

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Database - VisionAttend AI{% endblock %}
+{% block page_title %}Database{% endblock %}
+{% block content %}
+<div class="mb-6 flex justify-between items-center">
+    <p class="font-body-md text-body-md text-on-surface-variant">Manage system databases and backups.</p>
+    <div class="flex gap-2">
+        <button onclick="backupDatabase()" class="px-3 py-1.5 bg-primary/20 text-primary border border-primary/30 rounded font-body-sm hover:bg-primary/30 transition-colors flex items-center gap-1">
+            <span class="material-symbols-outlined text-[16px]">backup</span> Backup All
+        </button>
+    </div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    {% for name, info in databases.items() %}
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-4">
+        <div class="flex items-center gap-3 mb-4">
+            <span class="material-symbols-outlined text-primary text-[24px]">database</span>
+            <div>
+                <h4 class="font-headline-md text-headline-md text-on-surface capitalize">{{ name }}</h4>
+                <p class="font-data-mono text-[10px] text-outline truncate max-w-[180px]">{{ info.path }}</p>
+            </div>
+        </div>
+        <div class="space-y-2 mb-4">
+            <div class="flex justify-between text-body-sm">
+                <span class="text-on-surface-variant">Size</span>
+                <span class="font-data-mono text-on-surface">{{ info.size_mb }} MB</span>
+            </div>
+            {% for table, count in info.tables.items() %}
+            <div class="flex justify-between text-body-sm">
+                <span class="text-on-surface-variant">{{ table }}</span>
+                <span class="font-data-mono text-on-surface">{{ count }} rows</span>
+            </div>
+            {% endfor %}
+        </div>
+        <button onclick="clearDatabase('{{ name }}')" class="w-full px-3 py-1.5 bg-error/10 text-error border border-error/20 rounded font-body-sm hover:bg-error/20 transition-colors">
+            Clear Data
+        </button>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function backupDatabase() {
+    const r = await apiCall('/api/database/backup', 'POST');
+    showToast(r.message || r.error, r.ok ? 'success' : 'error');
+}
+async function clearDatabase(name) {
+    if (!confirm(`Clear all data in the ${name} database? This cannot be undone.`)) return;
+    const r = await apiCall('/api/database/clear', 'POST', {database: name});
+    showToast(r.message || r.error, r.ok ? 'success' : 'error');
+    if (r.ok) setTimeout(() => location.reload(), 500);
+}
+</script>
+{% endblock %}

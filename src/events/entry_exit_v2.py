@@ -42,13 +42,26 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 class TrackState(Enum):
-    """5-State Finite State Machine for Entry/Exit Detection."""
+    """7-State Finite State Machine for Entry/Exit Detection.
+    
+    States:
+    - OUTSIDE: Person is far from line on negative side
+    - APPROACHING: Person is near line on negative side, moving toward it
+    - BUFFER: Person is on/near the line (within threshold)
+    - CROSSING: Person is actively crossing the line
+    - INSIDE: Person is far from line on positive side
+    - APPROACHING_EXIT: Person is near line on positive side, moving toward it
+    - LOCKED_AFTER_ENTRY: After ENTRY event, prevent immediate reverse
+    - LOCKED_AFTER_EXIT: After EXIT event, prevent immediate reverse
+    """
     OUTSIDE = "OUTSIDE"
-    APPROACHING = "APPROACHING"      # Moving toward line
+    APPROACHING = "APPROACHING"      # Moving toward line from outside
     BUFFER = "BUFFER"                # In threshold band
     CROSSING = "CROSSING"            # Actively crossing
-    INSIDE = "INSIDE"
+    INSIDE = "INSIDE"                # Far inside
     APPROACHING_EXIT = "APPROACHING_EXIT"  # Moving toward line from inside
+    LOCKED_AFTER_ENTRY = "LOCKED_AFTER_ENTRY"  # Prevent immediate exit after entry
+    LOCKED_AFTER_EXIT = "LOCKED_AFTER_EXIT"
 
 
 @dataclass
@@ -285,18 +298,79 @@ class EntryExitEngineV2:
         # Signed distance
         return cross / (length_sq ** 0.5)
     
-    def _get_zone_from_distance(self, distance: float) -> TrackState:
-        """Get zone from signed distance."""
+    def _get_spatial_zone(self, distance: float) -> TrackState:
+        """Get raw spatial zone from signed distance only (no state awareness).
+        
+        Returns:
+            OUTSIDE: far from line on negative side
+            BUFFER: near the line (within buffer_threshold)
+            INSIDE: far from line on positive side
+        """
         if distance > self.buffer_threshold:
             return TrackState.INSIDE
         elif distance < -self.buffer_threshold:
             return TrackState.OUTSIDE
-        elif distance > 0:
-            return TrackState.BUFFER
-        elif distance < 0:
-            return TrackState.BUFFER
         else:
             return TrackState.BUFFER
+    
+    def _get_zone_from_distance(self, distance: float, current_state: TrackState = TrackState.OUTSIDE, 
+                                 velocity: Tuple[float, float] = (0.0, 0.0)) -> TrackState:
+        """Get zone from signed distance with state and velocity awareness.
+        
+        This method combines spatial zone with movement direction to determine
+        the appropriate state for the state machine.
+        
+        Returns:
+            OUTSIDE: far negative, not moving toward line
+            APPROACHING: near negative or in buffer, moving toward line
+            BUFFER: on/near line, stationary or ambiguous movement
+            INSIDE: far positive, not moving toward line
+            APPROACHING_EXIT: near positive or in buffer, moving toward line from inside
+        """
+        vx, vy = velocity
+        speed = (vx**2 + vy**2)**0.5
+        
+        # Determine direction of movement relative to line
+        line_vec = (self._line[1][0] - self._line[0][0], self._line[1][1] - self._line[0][1])
+        line_length = (line_vec[0]**2 + line_vec[1]**2)**0.5
+        if line_length > 0:
+            line_vec = (line_vec[0] / line_length, line_vec[1] / line_length)
+        
+        dot_product = vx * line_vec[0] + vy * line_vec[1]
+        is_toward_inside = dot_product > 0.1
+        is_toward_outside = dot_product < -0.1
+        is_fast = speed > 0.5
+        
+        # Get raw spatial zone
+        spatial_zone = self._get_spatial_zone(distance)
+        
+        # If we're in a transition state (APPROACHING, APPROACHING_EXIT, CROSSING, LOCKED),
+        # preserve it until the transition completes
+        if current_state in (TrackState.APPROACHING, TrackState.APPROACHING_EXIT, 
+                              TrackState.CROSSING, TrackState.LOCKED_AFTER_ENTRY, 
+                              TrackState.LOCKED_AFTER_EXIT):
+            return current_state
+        
+        # Determine zone based on spatial position and movement
+        if spatial_zone == TrackState.OUTSIDE:
+            if is_toward_inside:
+                return TrackState.APPROACHING
+            else:
+                return TrackState.OUTSIDE
+        
+        elif spatial_zone == TrackState.INSIDE:
+            if is_toward_outside:
+                return TrackState.APPROACHING_EXIT
+            else:
+                return TrackState.INSIDE
+        
+        else:  # BUFFER zone
+            if is_toward_inside:
+                return TrackState.APPROACHING
+            elif is_toward_outside:
+                return TrackState.APPROACHING_EXIT
+            else:
+                return TrackState.BUFFER
     
     # =========================================================================
     # LAYER 2: 5-STATE FINITE STATE MACHINE
@@ -328,62 +402,133 @@ class EntryExitEngineV2:
         # Check if moving toward INSIDE (positive distance side)
         is_toward_inside = dot_product > 0.1
         is_toward_outside = dot_product < -0.1
+        is_fast = speed > 0.5
         
         # Current zone based on distance
         current_zone = new_zone
         
-        # Define state transitions
-        transitions = {
-            # Entry path
-            (TrackState.OUTSIDE, TrackState.BUFFER): (
-                TrackState.APPROACHING if is_toward_inside else TrackState.BUFFER, None
-            ),
-            (TrackState.APPROACHING, TrackState.BUFFER): (
-                TrackState.BUFFER, None
-            ),
-            (TrackState.APPROACHING, TrackState.CROSSING): (
-                TrackState.CROSSING, None
-            ),
-            (TrackState.BUFFER, TrackState.CROSSING): (
-                TrackState.CROSSING, None
-            ),
-            (TrackState.CROSSING, TrackState.INSIDE): (
-                TrackState.INSIDE, "ENTRY"
-            ),
-            
-            # Exit path
-            (TrackState.INSIDE, TrackState.BUFFER): (
-                TrackState.APPROACHING_EXIT if is_toward_outside else TrackState.BUFFER, None
-            ),
-            (TrackState.APPROACHING_EXIT, TrackState.BUFFER): (
-                TrackState.BUFFER, None
-            ),
-            (TrackState.APPROACHING_EXIT, TrackState.CROSSING): (
-                TrackState.CROSSING, None
-            ),
-            (TrackState.BUFFER, TrackState.CROSSING): (
-                TrackState.CROSSING, None
-            ),
-            (TrackState.CROSSING, TrackState.OUTSIDE): (
-                TrackState.OUTSIDE, "EXIT"
-            ),
-            
-            # Direct transitions (skip BUFFER if moving fast)
-            (TrackState.OUTSIDE, TrackState.INSIDE): (
-                TrackState.INSIDE, "ENTRY" if is_toward_inside and speed > 0.5 else None
-            ),
-            (TrackState.INSIDE, TrackState.OUTSIDE): (
-                TrackState.OUTSIDE, "EXIT" if is_toward_outside and speed > 0.5 else None
-            ),
-        }
+        # =============================================================================
+        # ENTRY PATH: OUTSIDE -> APPROACHING -> BUFFER -> CROSSING -> INSIDE
+        # =============================================================================
+        if prev_state == TrackState.OUTSIDE:
+            if current_zone == TrackState.APPROACHING:
+                if is_toward_inside:
+                    return TrackState.APPROACHING, None
+                else:
+                    return TrackState.OUTSIDE, None
+            elif current_zone == TrackState.BUFFER:
+                if is_toward_inside:
+                    return TrackState.APPROACHING, None
+                else:
+                    return TrackState.OUTSIDE, None
+            elif current_zone == TrackState.INSIDE:
+                if is_toward_inside and is_fast:
+                    return TrackState.INSIDE, "ENTRY"
+                else:
+                    return TrackState.APPROACHING, None
         
-        # Check transition
-        transition_key = (prev_state, current_zone)
-        if transition_key in transitions:
-            new_state, event = transitions[transition_key]
-            return new_state, event
+        if prev_state == TrackState.APPROACHING:
+            if current_zone == TrackState.BUFFER:
+                if is_toward_inside:
+                    return TrackState.BUFFER, None
+                else:
+                    return TrackState.OUTSIDE, None
+            elif current_zone == TrackState.INSIDE:
+                if is_toward_inside:
+                    return TrackState.CROSSING, None
+                else:
+                    return TrackState.BUFFER, None
         
-        # Default: stay in current state
+        if prev_state == TrackState.BUFFER:
+            if current_zone == TrackState.INSIDE:
+                if is_toward_inside:
+                    return TrackState.CROSSING, None
+                else:
+                    return TrackState.BUFFER, None
+            elif current_zone == TrackState.OUTSIDE:
+                return TrackState.OUTSIDE, None
+        
+        if prev_state == TrackState.CROSSING:
+            if current_zone == TrackState.INSIDE:
+                return TrackState.INSIDE, "ENTRY"
+            elif current_zone == TrackState.BUFFER:
+                if is_toward_inside:
+                    return TrackState.INSIDE, "ENTRY"
+                else:
+                    return TrackState.BUFFER, None
+        
+        # =============================================================================
+        # EXIT PATH: INSIDE -> APPROACHING_EXIT -> BUFFER -> CROSSING -> OUTSIDE
+        # =============================================================================
+        if prev_state == TrackState.INSIDE:
+            if current_zone == TrackState.APPROACHING_EXIT:
+                if is_toward_outside:
+                    return TrackState.APPROACHING_EXIT, None
+                else:
+                    return TrackState.INSIDE, None
+            elif current_zone == TrackState.BUFFER:
+                if is_toward_outside:
+                    return TrackState.APPROACHING_EXIT, None
+                else:
+                    return TrackState.INSIDE, None
+            elif current_zone == TrackState.OUTSIDE:
+                if is_toward_outside and is_fast:
+                    return TrackState.OUTSIDE, "EXIT"
+                else:
+                    return TrackState.APPROACHING_EXIT, None
+        
+        if prev_state == TrackState.APPROACHING_EXIT:
+            if current_zone == TrackState.BUFFER:
+                if is_toward_outside:
+                    return TrackState.BUFFER, None
+                else:
+                    return TrackState.INSIDE, None
+            elif current_zone == TrackState.OUTSIDE:
+                if is_toward_outside:
+                    return TrackState.CROSSING, None
+                else:
+                    return TrackState.BUFFER, None
+        
+        if prev_state == TrackState.CROSSING:
+            if current_zone == TrackState.OUTSIDE:
+                return TrackState.OUTSIDE, "EXIT"
+            elif current_zone == TrackState.BUFFER:
+                if is_toward_outside:
+                    return TrackState.OUTSIDE, "EXIT"
+                else:
+                    return TrackState.BUFFER, None
+        
+        # =============================================================================
+        # LOCKED STATES: After event, allow reverse transition
+        # =============================================================================
+        if prev_state == TrackState.LOCKED_AFTER_ENTRY:
+            # After entry, can only exit
+            if current_zone == TrackState.APPROACHING_EXIT:
+                return TrackState.APPROACHING_EXIT, None
+            elif current_zone == TrackState.BUFFER:
+                return TrackState.APPROACHING_EXIT, None
+            elif current_zone == TrackState.OUTSIDE:
+                return TrackState.CROSSING, None
+        
+        if prev_state == TrackState.LOCKED_AFTER_EXIT:
+            # After exit, can only enter
+            if current_zone == TrackState.APPROACHING:
+                return TrackState.APPROACHING, None
+            elif current_zone == TrackState.BUFFER:
+                return TrackState.APPROACHING, None
+            elif current_zone == TrackState.INSIDE:
+                return TrackState.CROSSING, None
+        
+        # =============================================================================
+        # DEFAULT: Stay in current state or handle unexpected transitions
+        # =============================================================================
+        # If zone changed but no transition defined, move to the zone
+        if prev_state != current_zone and prev_state not in (
+            TrackState.CROSSING, TrackState.APPROACHING, TrackState.APPROACHING_EXIT,
+            TrackState.LOCKED_AFTER_ENTRY, TrackState.LOCKED_AFTER_EXIT
+        ):
+            return current_zone, None
+        
         return prev_state, None
     
     # =========================================================================
@@ -447,7 +592,7 @@ class EntryExitEngineV2:
         
         # Check 4: No backtracking (INSIDE -> OUTSIDE -> INSIDE in short time)
         if event_type == "ENTRY" and len(history.trajectory) >= 3:
-            states = [p.state for p in history.trajectory[-3:]]
+            states = [p.state for p in list(history.trajectory)[-3:]]
             if TrackState.INSIDE in states and TrackState.OUTSIDE in states:
                 logger.debug(f"Trajectory validation failed: backtracking detected")
                 return False
@@ -697,55 +842,13 @@ class EntryExitEngineV2:
             history.track_id = track.track_id
             history.total_frames += 1
             
-            # Skip if track is too young
-            if track.hits < self.min_track_frames:
-                # Still warming up
-                point = self._get_probe_point(track)
-                distance = self._calculate_signed_distance(point, line)
-                zone = self._get_zone_from_distance(distance)
-                
-                history.trajectory.append(TrajectoryPoint(
-                    timestamp=now,
-                    x=point[0],
-                    y=point[1],
-                    state=zone,
-                    distance=distance,
-                ))
-                
-                # Update deep frames if outside buffer
-                if abs(distance) > self.buffer_threshold:
-                    history.deep_frames_in_state += 1
-                
-                continue
-            
             # Get probe point
             point = self._get_probe_point(track)
             
             # LAYER 1: Calculate signed distance
             distance = self._calculate_signed_distance(point, line)
             
-            # Check segment gate (must be near the line segment, not infinite line)
-            if not is_near_segment(point, line, pad=self.segment_pad):
-                # Not near the door, skip
-                # But keep track of position
-                zone = self._get_zone_from_distance(distance)
-                history.trajectory.append(TrajectoryPoint(
-                    timestamp=now,
-                    x=point[0],
-                    y=point[1],
-                    state=zone,
-                    distance=distance,
-                ))
-                
-                if abs(distance) > self.buffer_threshold:
-                    history.current_state = zone
-                    history.deep_frames_in_state += 1
-                continue
-            
-            # LAYER 1: Determine zone from distance
-            new_zone = self._get_zone_from_distance(distance)
-            
-            # Calculate velocity (pixels/frame)
+            # Calculate velocity (pixels/frame) - need this for zone determination
             if len(history.trajectory) >= 1:
                 prev_point = history.trajectory[-1]
                 dt = now - prev_point.timestamp
@@ -758,6 +861,48 @@ class EntryExitEngineV2:
                     velocity = (0.0, 0.0)
             else:
                 velocity = (0.0, 0.0)
+            
+            # Skip if track is too young
+            if track.hits < self.min_track_frames:
+                # Still warming up - use simple zone detection
+                zone = self._get_zone_from_distance(distance, history.current_state, velocity)
+                
+                history.trajectory.append(TrajectoryPoint(
+                    timestamp=now,
+                    x=point[0],
+                    y=point[1],
+                    state=zone,
+                    distance=distance,
+                    velocity=velocity,
+                ))
+                
+                # Update deep frames if outside buffer
+                if abs(distance) > self.buffer_threshold:
+                    history.deep_frames_in_state += 1
+                
+                continue
+            
+            # Check segment gate (must be near the line segment, not infinite line)
+            if not is_near_segment(point, line, pad=self.segment_pad):
+                # Not near the door, skip
+                # But keep track of position
+                zone = self._get_zone_from_distance(distance, history.current_state, velocity)
+                history.trajectory.append(TrajectoryPoint(
+                    timestamp=now,
+                    x=point[0],
+                    y=point[1],
+                    state=zone,
+                    distance=distance,
+                    velocity=velocity,
+                ))
+                
+                if abs(distance) > self.buffer_threshold:
+                    history.current_state = zone
+                    history.deep_frames_in_state += 1
+                continue
+            
+            # LAYER 1: Determine zone from distance with velocity awareness
+            new_zone = self._get_zone_from_distance(distance, history.current_state, velocity)
             
             # LAYER 2: State transition
             new_state, event_type = self._get_transition(
@@ -821,16 +966,20 @@ class EntryExitEngineV2:
                     history.last_event_type = event_type
                     history.is_locked = True
                     
-                    # Update direction for next potential event
-                    history.current_state = (
-                        TrackState.INSIDE if event_type == "ENTRY" 
-                        else TrackState.OUTSIDE
-                    )
+                    # Update state after event - enter locked state to prevent immediate reverse
+                    if event_type == "ENTRY":
+                        history.current_state = TrackState.LOCKED_AFTER_ENTRY
+                    else:
+                        history.current_state = TrackState.LOCKED_AFTER_EXIT
                     
                     # Update counts
                     direction = event.direction.lower()
                     self.counts[direction] = self.counts.get(direction, 0) + 1
-                    self.counts["present"] = self.counts.get("entry", 0) - self.counts.get("exit", 0)
+                    # Correct present count: increment for entry, decrement for exit
+                    if direction == "entry":
+                        self.counts["present"] = self.counts.get("present", 0) + 1
+                    elif direction == "exit":
+                        self.counts["present"] = max(0, self.counts.get("present", 0) - 1)
                     self._total_events += 1
             
             # Update track metadata

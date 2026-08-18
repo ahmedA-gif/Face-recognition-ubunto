@@ -80,7 +80,7 @@ class PersonDetector:
         
         # Try to use environment variable for device
         env_device = os.environ.get("VMS_DEVICE", "").lower()
-        if env_device and device == "cpu":
+        if env_device:
             self.device = env_device
         
         # Try to use environment variable for backend
@@ -90,13 +90,14 @@ class PersonDetector:
         
         # Initialize the appropriate backend
         self._init_backend(weights)
-        
-        # Get model metadata
-        meta = self.session.get_modelmeta()
-        inp = self.session.get_inputs()[0]
-        self._inp_name = inp.name
-        self._inp_shape = inp.shape
-        self._num_classes = 80 if "v8" in meta.description.lower() or "yolo" in meta.description.lower() else 80
+
+        # Get model metadata (ONNX Runtime only — TensorRT/OpenVINO skip this)
+        if self.session is not None:
+            meta = self.session.get_modelmeta()
+            inp = self.session.get_inputs()[0]
+            self._inp_name = inp.name
+            self._inp_shape = inp.shape
+            self._num_classes = 80 if "v8" in meta.description.lower() or "yolo" in meta.description.lower() else 80
     
     def _init_backend(self, weights: str) -> None:
         """Initialize the appropriate inference backend."""
@@ -146,6 +147,7 @@ class PersonDetector:
             
             self._inp_name = "input"
             self._is_tensorrt = True
+            self.session = None  # TensorRT backend has no onnxruntime session
             
         except ImportError as e:
             print(f"[WARNING] TensorRT not available: {e}. Falling back to ONNX Runtime.")
@@ -197,12 +199,10 @@ class PersonDetector:
                 except:
                     providers = ["CPUExecutionProvider"]
             
-            # Set provider options for GPU
-            provider_options = []
-            if "CUDAExecutionProvider" in providers:
-                provider_options = [
-                    {"device_id": 0},  # Use first GPU
-                ]
+            # Set provider options for GPU (must align 1:1 with providers)
+            provider_options = [
+                {"device_id": 0} if p == "CUDAExecutionProvider" else {} for p in providers
+            ] if providers else None
             
             self.session = ort.InferenceSession(
                 onnx_path, 

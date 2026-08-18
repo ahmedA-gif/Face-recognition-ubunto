@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}System - VisionAttend AI{% endblock %}
+{% block page_title %}System{% endblock %}
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <!-- Hardware -->
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-6">
+        <h3 class="font-headline-md text-headline-md font-semibold text-on-surface mb-4">Hardware</h3>
+        <div class="space-y-3">
+            <div class="flex justify-between py-2 border-b border-outline-variant/30">
+                <span class="text-on-surface-variant">GPU</span>
+                <span class="font-data-mono text-data-mono {{ 'text-secondary' if gpu_available else 'text-error' }}">{{ gpu_name }}</span>
+            </div>
+            <div class="flex justify-between py-2 border-b border-outline-variant/30">
+                <span class="text-on-surface-variant">Compute Mode</span>
+                <span class="font-data-mono text-data-mono text-on-surface">{{ "GPU (CUDA)" if gpu_mode else "CPU" }}</span>
+            </div>
+            <div class="flex justify-between py-2 border-b border-outline-variant/30">
+                <span class="text-on-surface-variant">Python</span>
+                <span class="font-data-mono text-data-mono text-on-surface">{{ python_version }}</span>
+            </div>
+            <div class="flex justify-between py-2">
+                <span class="text-on-surface-variant">OS</span>
+                <span class="font-data-mono text-data-mono text-on-surface">{{ os_info }}</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Models -->
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-6">
+        <h3 class="font-headline-md text-headline-md font-semibold text-on-surface mb-4">Loaded Models</h3>
+        <div class="space-y-3">
+            {% for name, path in models.items() %}
+            <div class="flex justify-between py-2 border-b border-outline-variant/30">
+                <span class="text-on-surface-variant capitalize">{{ name }}</span>
+                <span class="font-data-mono text-[11px] text-on-surface-variant truncate max-w-[200px]">{{ path.split('/')[-1].split('\\')[-1] if path else 'N/A' }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- GPU/CPU Switch -->
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-6">
+        <h3 class="font-headline-md text-headline-md font-semibold text-on-surface mb-4">Compute Mode</h3>
+        <p class="text-on-surface-variant font-body-sm mb-4">Switch between GPU and CPU inference. GPU requires CUDA-compatible hardware.</p>
+        <div class="flex gap-3">
+            <button onclick="switchMode('gpu')" class="flex-1 px-4 py-3 rounded-lg border-2 transition-all text-center
+                {% if gpu_mode %}border-secondary bg-secondary/10 text-secondary{% else %}border-outline-variant text-on-surface-variant hover:border-outline{% endif %}">
+                <span class="material-symbols-outlined text-[24px] block mb-1">memory</span>
+                <span class="font-label-caps text-label-caps">GPU MODE</span>
+            </button>
+            <button onclick="switchMode('cpu')" class="flex-1 px-4 py-3 rounded-lg border-2 transition-all text-center
+                {% if not gpu_mode %}border-primary bg-primary/10 text-primary{% else %}border-outline-variant text-on-surface-variant hover:border-outline{% endif %}">
+                <span class="material-symbols-outlined text-[24px] block mb-1">developer_board</span>
+                <span class="font-label-caps text-label-caps">CPU MODE</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Pipeline Control -->
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-6">
+        <h3 class="font-headline-md text-headline-md font-semibold text-on-surface mb-4">Pipeline Control</h3>
+        <div class="flex items-center gap-3 mb-4">
+            <span class="w-3 h-3 rounded-full {% if pipeline_running %}bg-secondary animate-pulse{% else %}bg-outline{% endif %}"></span>
+            <span class="font-data-mono text-data-mono text-on-surface">{{ "RUNNING" if pipeline_running else "STOPPED" }}</span>
+        </div>
+        <div class="flex gap-3">
+            <button onclick="startPipeline()" class="flex-1 px-4 py-2 bg-secondary/20 text-secondary border border-secondary/30 rounded font-body-sm font-medium hover:bg-secondary/30 transition-colors flex items-center justify-center gap-2">
+                <span class="material-symbols-outlined text-[18px]">play_arrow</span> Start
+            </button>
+            <button onclick="stopPipeline()" class="flex-1 px-4 py-2 bg-error/20 text-error border border-error/30 rounded font-body-sm font-medium hover:bg-error/30 transition-colors flex items-center justify-center gap-2">
+                <span class="material-symbols-outlined text-[18px]">stop</span> Stop
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function switchMode(mode) {
+    const r = await apiCall('/api/gpu/switch', 'POST', {mode});
+    showToast(r.ok ? `Switched to ${mode.toUpperCase()} mode` : r.error, r.ok ? 'success' : 'error');
+    if (r.ok) setTimeout(() => location.reload(), 500);
+}
+async function startPipeline() {
+    const r = await apiCall('/api/pipeline/start', 'POST', {});
+    showToast(r.message || r.error, r.ok ? 'success' : 'error');
+    setTimeout(() => location.reload(), 1000);
+}
+async function stopPipeline() {
+    const r = await apiCall('/api/pipeline/stop', 'POST', {});
+    showToast(r.message || r.error, r.ok ? 'success' : 'error');
+    setTimeout(() => location.reload(), 1000);
+}
+</script>
+{% endblock %}

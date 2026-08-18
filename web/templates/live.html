@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Live Monitoring - VisionAttend AI{% endblock %}
+{% block page_title %}Live Monitoring{% endblock %}
+{% block content %}
+<div class="flex gap-md h-[calc(100vh-120px)]">
+    <!-- Main Video Feed -->
+    <div class="flex-1 flex flex-col min-w-0 bg-[#161618] border border-outline-variant rounded-lg overflow-hidden">
+        <div class="h-12 bg-surface-container-low border-b border-outline-variant flex items-center justify-between px-md shrink-0">
+            <div class="flex items-center gap-3">
+                <span class="px-2 py-0.5 bg-error/15 text-error border border-error/30 rounded font-label-caps text-label-caps flex items-center gap-1.5">
+                    <span class="w-1.5 h-1.5 bg-error rounded-full {% if pipeline_running %}animate-pulse{% endif %}"></span>
+                    {{ "LIVE" if pipeline_running else "OFFLINE" }}
+                </span>
+                <h2 class="font-data-mono text-data-mono text-on-surface">CAM_01_MAIN_ENTRANCE</h2>
+            </div>
+            <div class="flex gap-2">
+                <button onclick="startPipeline()" class="px-3 py-1 bg-secondary/20 text-secondary border border-secondary/30 rounded text-[11px] font-label-caps hover:bg-secondary/30 transition-colors">
+                    START
+                </button>
+                <button onclick="stopPipeline()" class="px-3 py-1 bg-error/20 text-error border border-error/30 rounded text-[11px] font-label-caps hover:bg-error/30 transition-colors">
+                    STOP
+                </button>
+            </div>
+        </div>
+        <!-- Video Placeholder -->
+        <div class="flex-1 relative bg-black overflow-hidden flex items-center justify-center">
+            <div id="video-placeholder" class="text-center">
+                <span class="material-symbols-outlined text-[64px] text-outline/40">videocam</span>
+                <p class="text-on-surface-variant font-body-sm mt-2">{{ "Streaming..." if pipeline_running else "Pipeline stopped" }}</p>
+                <p class="text-outline font-data-mono text-[11px] mt-1">Start pipeline to see live feed</p>
+            </div>
+            <div id="video-frame" class="hidden absolute inset-0">
+                <img id="live-frame" class="w-full h-full object-contain" alt="Live Feed"/>
+            </div>
+            <!-- Timestamp overlay -->
+            <div class="absolute bottom-4 left-4 font-data-mono text-data-mono text-on-surface bg-surface-container-highest/80 backdrop-blur px-2 py-1 rounded border border-outline-variant">
+                <span id="live-timestamp"></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Panel: Live Events Feed -->
+    <aside class="w-80 bg-[#161618] border border-outline-variant rounded-lg flex flex-col overflow-hidden shrink-0">
+        <div class="p-3 border-b border-outline-variant flex items-center justify-between bg-surface-container-low">
+            <h3 class="font-headline-md text-body-lg font-semibold text-on-surface">Live Detection Feed</h3>
+        </div>
+        <div id="live-events" class="flex-1 overflow-y-auto p-2 space-y-1 bg-surface-dim">
+            <div class="p-4 text-center text-on-surface-variant font-body-sm">No events yet</div>
+        </div>
+        <div class="p-2 border-t border-outline-variant bg-surface-container-low flex justify-between items-center">
+            <span class="font-label-caps text-label-caps text-on-surface-variant">EVENTS (1H)</span>
+            <span class="font-data-mono text-data-mono text-primary" id="events-count">0</span>
+        </div>
+    </aside>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function startPipeline() {
+    const r = await apiCall('/api/pipeline/start', 'POST', {});
+    showToast(r.message || r.error, r.ok ? 'success' : 'error');
+    setTimeout(() => location.reload(), 1000);
+}
+async function stopPipeline() {
+    const r = await apiCall('/api/pipeline/stop', 'POST', {});
+    showToast(r.message || r.error, r.ok ? 'success' : 'error');
+    setTimeout(() => location.reload(), 1000);
+}
+async function refreshLiveEvents() {
+    try {
+        const r = await fetch('/api/events?limit=20');
+        const events = await r.json();
+        const container = document.getElementById('live-events');
+        const countEl = document.getElementById('events-count');
+        if (!container) return;
+        if (events.length === 0) {
+            container.innerHTML = '<div class="p-4 text-center text-on-surface-variant font-body-sm">No events yet</div>';
+            return;
+        }
+        countEl.textContent = events.length;
+        container.innerHTML = events.slice(0, 15).map(ev => `
+            <div class="p-2 rounded border-l-2 ${ev.direction==='entry' ? 'border-secondary' : 'border-tertiary'} bg-surface hover:bg-surface-container-highest border-y border-r border-outline-variant/50 transition-colors">
+                <div class="flex justify-between items-start mb-1">
+                    <span class="font-data-mono text-[10px] text-on-surface-variant">${ev.time || ''}</span>
+                    <span class="font-label-caps text-[9px] px-1 rounded ${ev.direction==='entry' ? 'text-secondary bg-secondary/10' : 'text-tertiary bg-tertiary/10'}">${(ev.direction||'').toUpperCase()}</span>
+                </div>
+                <div class="font-body-sm text-body-sm text-on-surface">
+                    <span class="font-semibold">${ev.person || 'Unknown'}</span> ${ev.direction==='entry' ? 'Entered' : 'Exited'}
+                </div>
+            </div>
+        `).join('');
+    } catch(e) {}
+}
+setInterval(refreshLiveEvents, 3000);
+refreshLiveEvents();
+function updateTimestamp() {
+    const el = document.getElementById('live-timestamp');
+    if (el) el.textContent = new Date().toLocaleString();
+}
+setInterval(updateTimestamp, 1000);
+</script>
+{% endblock %}

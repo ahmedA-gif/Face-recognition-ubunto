@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Settings - VisionAttend AI{% endblock %}
+{% block page_title %}Settings{% endblock %}
+{% block content %}
+<div class="max-w-4xl">
+    <p class="font-body-md text-body-md text-on-surface-variant mb-6">Configure system parameters and camera settings.</p>
+
+    <!-- Camera Settings -->
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-6 mb-4">
+        <h3 class="font-headline-md text-headline-md font-semibold text-on-surface mb-4">Camera</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="block font-body-sm text-on-surface-variant mb-1">RTSP Source</label>
+                <input id="cfg-source" class="w-full bg-surface-container-lowest border border-outline-variant rounded px-3 py-2 text-body-sm text-on-surface font-data-mono focus:outline-none focus:border-primary" value="{{ config.camera.source }}"/>
+            </div>
+            <div>
+                <label class="block font-body-sm text-on-surface-variant mb-1">Resolution</label>
+                <div class="flex gap-2">
+                    <input id="cfg-width" class="w-1/2 bg-surface-container-lowest border border-outline-variant rounded px-3 py-2 text-body-sm text-on-surface font-data-mono focus:outline-none focus:border-primary" value="{{ config.camera.width }}" placeholder="Width"/>
+                    <input id="cfg-height" class="w-1/2 bg-surface-container-lowest border border-outline-variant rounded px-3 py-2 text-body-sm text-on-surface font-data-mono focus:outline-none focus:border-primary" value="{{ config.camera.height }}" placeholder="Height"/>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detection Settings -->
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-6 mb-4">
+        <h3 class="font-headline-md text-headline-md font-semibold text-on-surface mb-4">Detection</h3>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+                <label class="block font-body-sm text-on-surface-variant mb-1">YOLO Confidence</label>
+                <input id="cfg-yolo-conf" type="number" step="0.05" min="0" max="1" class="w-full bg-surface-container-lowest border border-outline-variant rounded px-3 py-2 text-body-sm text-on-surface font-data-mono focus:outline-none focus:border-primary" value="{{ config.models.yolo_conf }}"/>
+            </div>
+            <div>
+                <label class="block font-body-sm text-on-surface-variant mb-1">YOLO Image Size</label>
+                <input id="cfg-yolo-imgsz" type="number" class="w-full bg-surface-container-lowest border border-outline-variant rounded px-3 py-2 text-body-sm text-on-surface font-data-mono focus:outline-none focus:border-primary" value="{{ config.models.yolo_imgsz }}"/>
+            </div>
+            <div>
+                <label class="block font-body-sm text-on-surface-variant mb-1">Face Match Threshold</label>
+                <input id="cfg-face-threshold" type="number" step="0.05" min="0" max="1" class="w-full bg-surface-container-lowest border border-outline-variant rounded px-3 py-2 text-body-sm text-on-surface font-data-mono focus:outline-none focus:border-primary" value="{{ config.models.face_match_threshold }}"/>
+            </div>
+        </div>
+    </div>
+
+    <!-- Crossing Line Settings -->
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-6 mb-4">
+        <h3 class="font-headline-md text-headline-md font-semibold text-on-surface mb-4">Crossing Line</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="block font-body-sm text-on-surface-variant mb-1">Enabled</label>
+                <select id="cfg-cl-enabled" class="w-full bg-surface-container-lowest border border-outline-variant rounded px-3 py-2 text-body-sm text-on-surface focus:outline-none focus:border-primary">
+                    <option value="true" {{ 'selected' if config.get('crossing_line',{}).get('enabled') }}>Yes</option>
+                    <option value="false" {{ 'selected' if not config.get('crossing_line',{}).get('enabled') }}>No</option>
+                </select>
+            </div>
+            <div>
+                <label class="block font-body-sm text-on-surface-variant mb-1">Entry Direction</label>
+                <select id="cfg-cl-direction" class="w-full bg-surface-container-lowest border border-outline-variant rounded px-3 py-2 text-body-sm text-on-surface focus:outline-none focus:border-primary">
+                    {% for d in ['upward','downward','leftward','rightward'] %}
+                    <option value="{{ d }}" {{ 'selected' if config.get('crossing_line',{}).get('entry_direction') == d }}>{{ d }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block font-body-sm text-on-surface-variant mb-1">Line Y Position</label>
+                <input id="cfg-cl-y" type="number" step="0.01" min="0" max="1" class="w-full bg-surface-container-lowest border border-outline-variant rounded px-3 py-2 text-body-sm text-on-surface font-data-mono focus:outline-none focus:border-primary" value="{{ config.get('crossing_line',{}).get('line',{}).get('y1', 0.83) }}"/>
+            </div>
+            <div>
+                <label class="block font-body-sm text-on-surface-variant mb-1">Cooldown (sec)</label>
+                <input id="cfg-cl-cooldown" type="number" step="0.5" class="w-full bg-surface-container-lowest border border-outline-variant rounded px-3 py-2 text-body-sm text-on-surface font-data-mono focus:outline-none focus:border-primary" value="{{ config.get('crossing_line',{}).get('cooldown_sec', 2.0) }}"/>
+            </div>
+        </div>
+    </div>
+
+    <!-- Save -->
+    <div class="flex justify-end gap-3">
+        <button onclick="location.reload()" class="px-4 py-2 text-on-surface-variant hover:text-on-surface transition-colors">Reset</button>
+        <button onclick="saveSettings()" class="px-6 py-2 bg-primary text-on-primary rounded font-body-sm font-medium hover:bg-primary-fixed transition-colors flex items-center gap-2">
+            <span class="material-symbols-outlined text-[18px]">save</span> Save Settings
+        </button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function saveSettings() {
+    const clY = parseFloat(document.getElementById('cfg-cl-y').value) || 0.83;
+    const updates = {
+        camera: {
+            source: document.getElementById('cfg-source').value,
+            width: parseInt(document.getElementById('cfg-width').value) || 1280,
+            height: parseInt(document.getElementById('cfg-height').value) || 720,
+        },
+        models: {
+            yolo_conf: parseFloat(document.getElementById('cfg-yolo-conf').value) || 0.45,
+            yolo_imgsz: parseInt(document.getElementById('cfg-yolo-imgsz').value) || 416,
+            face_match_threshold: parseFloat(document.getElementById('cfg-face-threshold').value) || 0.35,
+        },
+        crossing_line: {
+            enabled: document.getElementById('cfg-cl-enabled').value === 'true',
+            entry_direction: document.getElementById('cfg-cl-direction').value,
+            cooldown_sec: parseFloat(document.getElementById('cfg-cl-cooldown').value) || 2.0,
+            line: { x1: 0.1, y1: clY, x2: 0.9, y2: clY },
+        },
+    };
+    const r = await apiCall('/api/config', 'POST', updates);
+    showToast(r.message || r.error, r.ok ? 'success' : 'error');
+}
+</script>
+{% endblock %}

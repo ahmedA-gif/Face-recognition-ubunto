@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Events - VisionAttend AI{% endblock %}
+{% block page_title %}Events{% endblock %}
+{% block content %}
+<div class="mb-6">
+    <p class="font-body-md text-body-md text-on-surface-variant">All entry/exit detection events.</p>
+</div>
+<div class="bg-surface-container-high border border-outline-variant rounded-lg overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse">
+            <thead>
+                <tr class="border-b border-outline-variant bg-surface-container-low text-on-surface-variant font-label-caps text-label-caps">
+                    <th class="px-4 py-3 font-semibold">TIME</th>
+                    <th class="px-4 py-3 font-semibold">PERSON</th>
+                    <th class="px-4 py-3 font-semibold">DIRECTION</th>
+                    <th class="px-4 py-3 font-semibold">CAMERA</th>
+                    <th class="px-4 py-3 font-semibold">CONFIDENCE</th>
+                </tr>
+            </thead>
+            <tbody class="font-body-sm text-body-sm divide-y divide-outline-variant/30">
+                {% for ev in events %}
+                <tr class="hover:bg-surface-container-highest/50 transition-colors">
+                    <td class="px-4 py-3 font-data-mono text-[11px] text-on-surface-variant">{{ ev.date }} {{ ev.time }}</td>
+                    <td class="px-4 py-3 font-medium text-on-surface">{{ ev.person or 'Unknown' }}</td>
+                    <td class="px-4 py-3">
+                        <span class="font-label-caps text-[10px] px-1.5 py-0.5 rounded
+                            {% if ev.direction == 'entry' %}bg-secondary/10 text-secondary{% else %}bg-tertiary/10 text-tertiary{% endif %}">
+                            {{ ev.direction|upper }}
+                        </span>
+                    </td>
+                    <td class="px-4 py-3 text-on-surface-variant">{{ ev.camera_id }}</td>
+                    <td class="px-4 py-3 font-data-mono text-[11px] text-on-surface-variant">{{ "%.1f"|format(ev.confidence * 100) }}%</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="px-4 py-12 text-center text-on-surface-variant">No events recorded</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

@@ -11,9 +11,11 @@ from src.attendance.db import AttendanceDB
 from src.attendance.manager import AttendanceManager
 from src.capture.stream import CameraStream
 from src.detection.person_yolo import PersonDetector
+from src.events.crossing_line import CrossingLineEngine
 from src.events.door_intelligence import DoorIntelligenceEngine
 from src.events.dynamic_boundary import DynamicBoundaryEngine
 from src.events.entry_exit import EntryExitEngine
+from src.events.entry_exit_v2 import EntryExitEngineV2
 from src.events.redis_publisher import EventPublisher
 from src.events.store import Event, EventsStore
 from src.overlay.draw import OverlayRenderer
@@ -25,6 +27,15 @@ from src.tracking.bytetrack import ByteTracker, Track
 from src.tracking.identity_fusion import IdentityFusionEngine
 from src.utils.assign import attach_faces_to_tracks, appearance_signature
 from src.utils.config import load_zones
+
+
+def _line_dict_to_tuple(line):
+    """Convert {'x1':..,'y1':..,'x2':..,'y2':..} dict to (x1,y1,x2,y2) tuple."""
+    if isinstance(line, (list, tuple)):
+        return tuple(line)
+    if isinstance(line, dict):
+        return (float(line["x1"]), float(line["y1"]), float(line["x2"]), float(line["y2"]))
+    return (0.25, 0.75, 0.75, 0.75)
 
 
 @dataclass
@@ -84,7 +95,10 @@ def _build_components(cfg: dict[str, Any]):
         backend=backend,
     )
     tracker = ByteTracker()
-    face_engine = FaceEngine(root=m["face_root"], pack=m["face_pack"], det_size=tuple(m["face_det_size"]))
+    face_providers = None
+    if str(pipe["device"]).startswith(("cuda", "gpu")):
+        face_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    face_engine = FaceEngine(root=m["face_root"], pack=m["face_pack"], det_size=tuple(m["face_det_size"]), providers=face_providers)
     gallery = FaceGallery(
         db_path=ev["faces_db_path"],
         match_threshold=m["face_match_threshold"],
@@ -92,33 +106,51 @@ def _build_components(cfg: dict[str, Any]):
     )
     print(f"[Pipeline] {gallery.status()}")
     store = EventsStore(db_path=ev["db_path"])
-    entry_exit = EntryExitEngine(
+    
+    # Use EntryExitEngineV2 as the primary engine (fixed version)
+    # DoorIntelligence can be enabled as an alternative
+    entry_exit = EntryExitEngineV2(
         line_norm=ee["line"],
-        entry_direction=ee["entry_direction"],
-        debounce_sec=ee["debounce_sec"],
-        min_track_frames=ee["min_track_frames"],
-        hysteresis_px=ee.get("hysteresis_px", 14.0),
+        buffer_threshold=ee.get("buffer_threshold", 10.0),
+        debounce_sec=ee.get("debounce_sec", 1.5),
+        min_track_frames=ee.get("min_track_frames", 5),
+        min_deep_frames=ee.get("min_deep_frames", 3),
+        min_displacement=ee.get("min_displacement", 20.0),
         use_foot_point=bool(ee.get("use_foot_point", True)),
         segment_pad=float(ee.get("segment_pad", 0.12)),
-        require_committed_zone=bool(ee.get("require_committed_zone", True)),
+        camera_id=ee.get("camera_id", "cam_01"),
     )
     overlay = OverlayRenderer(
         pulse_frames=ov["pulse_frames"],
         hud=ov["hud"],
-        show_boundary=bool(ov.get("show_boundary", False)),
+        show_boundary=bool(ov.get("show_boundary", True)),
     )
 
-    # ── Door Intelligence Engine (polygon FSM) — primary when calibrated ──
+    # ── Door Intelligence Engine (polygon FSM) — optional ──
     di = cfg.get("door_intelligence", {})
     using_door_engine = bool(di.get("enabled", False))
-    if using_door_engine:
+
+    # ── CrossingLine Engine (ObjectCounter-inspired) — preferred ──
+    cl = cfg.get("crossing_line") or ee.get("crossing_line") or {}
+    using_crossing_line = bool(cl.get("enabled", False))
+
+    if using_crossing_line:
+        entry_exit = CrossingLineEngine(
+            line_norm=_line_dict_to_tuple(cl.get("line", ee.get("line", (0.25, 0.75, 0.75, 0.75)))),
+            entry_direction=cl.get("entry_direction", ee.get("entry_direction", "upward")),
+            camera_id=cl.get("camera_id", ee.get("camera_id", "cam_01")),
+            min_track_frames=cl.get("min_track_frames", ee.get("min_track_frames", 3)),
+            cooldown_sec=cl.get("cooldown_sec", 2.0),
+            min_crossing_gap_sec=cl.get("min_crossing_gap_sec", 1.0),
+        )
+    elif using_door_engine:
         zones = dict(di.get("zones") or {}) or load_zones(
             di.get("zones_path", "config/zones.yaml"), di.get("camera_id")
         )
         if not zones:
             print(
                 "[DoorIntelligence] enabled but no calibrated polygons found "
-                "(config/zones.yaml) — falling back to the line engine."
+                "(config/zones.yaml) — falling back to EntryExitEngineV2 (line-based)."
             )
             using_door_engine = False
         else:
@@ -130,17 +162,22 @@ def _build_components(cfg: dict[str, Any]):
                 min_dwell_door_sec=di.get("min_dwell_door_sec", 0.15),
                 min_inside_frames=di.get("min_inside_frames", 3),
                 min_outside_frames=di.get("min_outside_frames", 3),
-                lock_after_event=di.get("lock_after_event", True),
+                lock_after_event=di.get("lock_after_event", False),
                 motion_toward_inside_dot=di.get("motion_toward_inside_dot", 0.25),
                 motion_outward_dot=di.get("motion_outward_dot", 0.25),
                 peek_max_inside_sec=di.get("peek_max_inside_sec", 1.5),
                 uturn_max_door_sec=di.get("uturn_max_door_sec", 3.0),
                 min_event_confidence=di.get("min_event_confidence", 0.70),
                 purge_after_sec=di.get("purge_after_sec", 10.0),
+                min_motion_speed=di.get("min_motion_speed", 0.6),
             )
-    print(
-        f"[DoorIntelligence] {'ACTIVE (polygon FSM)' if using_door_engine else 'disabled (line engine)'}"
-    )
+    if using_crossing_line:
+        engine_name = "CrossingLine (ObjectCounter-style)"
+    elif using_door_engine:
+        engine_name = "DoorIntelligence (polygon FSM)"
+    else:
+        engine_name = "EntryExitEngineV2 (line-based)"
+    print(f"[EntryExit] Using {engine_name}")
 
     # ── new intelligence modules (config-gated) ────────────────────────────
     if_in = cfg.get("identity_fusion", {})
@@ -227,7 +264,7 @@ def _build_components(cfg: dict[str, Any]):
 
     return (detector, tracker, face_engine, gallery, store, entry_exit, overlay,
             fusion, boundary, reasoner, att_db, attendance,
-            publisher, using_door_engine, reid)
+            publisher, using_door_engine, using_crossing_line, reid)
 
 
 def _fix_counts(engine: EntryExitEngine) -> None:
@@ -251,9 +288,21 @@ def run_pipeline(
     pipe = cfg["pipeline"]
 
     source = normalize_source(source_override if source_override is not None else cam_cfg["source"])
+
+    # ── GPU auto-switch: check VRAM before building components ─────────
+    from src.hardware.gpu_monitor import gpu_monitor
+    gpu_cfg = cfg.get("gpu", {})
+    gpu_monitor.vram_threshold_gb = gpu_cfg.get("vram_threshold_gb", 2.5)
+    if gpu_monitor.try_use_gpu():
+        print(f"[GPUMonitor] GPU OK — using CUDA")
+    else:
+        pipe["device"] = "cpu"
+        print(f"[GPUMonitor] GPU unavailable or VRAM exceeded — using CPU")
+
     (detector, tracker, face_engine, gallery, store, event_engine, overlay,
      fusion, boundary, reasoner, att_db, attendance,
-     publisher, using_door_engine, reid) = _build_components(cfg)
+     publisher, using_door_engine, using_crossing_line, reid) = _build_components(cfg)
+    using_polygon_or_line = using_door_engine or using_crossing_line
 
     if skip_frames is None:
         skip_frames = int(pipe.get("skip_frames", 1))
@@ -268,7 +317,7 @@ def run_pipeline(
     last_faces = []
     seen_ids: set[int] = set()
     _printed_tracks: set = set()
-    _dbg_seen_zone: dict = {}
+    _dbg_prev_state: dict = {}  # track_id -> (zone, fsm, dir)
     boundary_applied = False
     last_boundary_progress = -1
     last_fused = -1
@@ -372,6 +421,12 @@ def run_pipeline(
                 if max_frames is not None and frames_processed > max_frames:
                     break
 
+                # Periodic GPU VRAM check — auto-switch to CPU if exceeded
+                if frames_processed % 150 == 0 and not gpu_monitor.try_use_gpu():
+                    if not str(pipe["device"]).startswith("cpu"):
+                        pipe["device"] = "cpu"
+                        print(f"[GPUMonitor] VRAM exceeded during run — switching to CPU")
+
                 if using_door_engine and not overlay._zones_px:
                     # Draw the calibrated polygons once frame size is known.
                     fh, fw = frame.shape[:2]
@@ -394,29 +449,6 @@ def run_pipeline(
                     if t.track_id not in seen_ids:
                         overlay.note_new_track(t.track_id)
                         seen_ids.add(t.track_id)
-
-                if tracks:
-                    for t in tracks:
-                        x1, y1, x2, y2 = t.xyxy
-                        fx = t.centroid[0] / frame.shape[1]
-                        fy = (y2 + (y1 - y2) * 0.5) / frame.shape[0]
-                        zone = "?"
-                        try:
-                            zone = event_engine._zone_for((x1 + (x2 - x1) * 0.5, y2)) if using_door_engine else "line"
-                        except Exception:
-                            pass
-                        fsm = t.meta.get("fsm_state", "-")
-                        prev_zone = getattr(t, "prev_side", None)
-                        is_new = t.track_id in _dbg_seen_zone and _dbg_seen_zone[t.track_id] != zone
-                        _dbg_seen_zone[t.track_id] = zone
-                        is_first = t.track_id not in _printed_tracks
-                        if is_new or is_first:
-                            _printed_tracks.add(t.track_id)
-                            print(
-                                f"[Track] id={t.track_id} {'NEW' if is_first else 'move'} "
-                                f"person={t.person_name!r} conf={t.conf:.2f} "
-                                f"feet=({fx:.2f},{fy:.2f}) zone={zone} fsm={fsm}"
-                            )
 
                 if run_face:
                     last_faces = face_engine.detect_and_embed(frame, min_face_px=cfg["models"]["min_face_px"])
@@ -442,7 +474,7 @@ def run_pipeline(
 
                 # ── Auto boundary: feed trajectories, apply when learned ──
                 # (skipped entirely while the polygon Door engine is active)
-                if boundary is not None and not using_door_engine:
+                if boundary is not None and not using_polygon_or_line:
                     fh, fw = frame.shape[:2]
                     for t in tracks:
                         gid = t.meta.get("global_id") if fusion is not None else None
@@ -468,16 +500,52 @@ def run_pipeline(
                     if n != last_boundary_progress and n > 0 and n % 10 == 0:
                         print(f"[Boundary] learning… {n}/{total} trajectory vectors")
                         last_boundary_progress = n
-                elif not boundary_applied and overlay.show_boundary and not using_door_engine:
+                elif not boundary_applied and overlay.show_boundary and not using_polygon_or_line:
                     # Auto-learning disabled → draw the static configured line
                     overlay.set_boundary(event_engine.line_norm, label="BOUNDARY")
                     boundary_applied = True
 
                 # ── Entry/exit events → reasoning → attendance → Redis ────
                 events = event_engine.update(tracks, frame.shape, store)
+
+                # ── Debug: print active tracks on NEW or state change ──────
+                if tracks:
+                    for t in tracks:
+                        zone = t.meta.get("zone", "?")
+                        fsm = t.meta.get("fsm_state", "-")
+                        direction = t.meta.get("direction", "-")
+                        state_key = (zone, fsm, direction)
+                        is_new = t.track_id not in _printed_tracks
+                        changed = _dbg_prev_state.get(t.track_id) != state_key
+                        _dbg_prev_state[t.track_id] = state_key
+                        if is_new or changed:
+                            from src.utils.geometry import foot_point as _fp
+                            _fp = _fp(t.xyxy)
+                            _fx = _fp[0] / frame.shape[1]
+                            _fy = _fp[1] / frame.shape[0]
+                            _printed_tracks.add(t.track_id)
+                            tag = "NEW" if is_new else "upd"
+                            print(
+                                f"[Track] id={t.track_id} {tag} "
+                                f"person={t.person_name!r} conf={t.conf:.2f} "
+                                f"feet=({_fx:.2f},{_fy:.2f}) zone={zone} fsm={fsm} "
+                                f"dir={direction}"
+                            )
+
                 if events:
                     total_events += len(events)
                     now_t = time.time()
+                    # Save snapshots for each event
+                    _snap_dir = Path(cfg.get("events", {}).get("snapshots_dir", "data/snapshots"))
+                    _snap_dir.mkdir(parents=True, exist_ok=True)
+                    for e in events:
+                        try:
+                            snap_name = f"{e.date}_{e.time.replace(':', '-')}_{e.track_id}_{e.direction}.jpg"
+                            snap_path = _snap_dir / snap_name
+                            cv2.imwrite(str(snap_path), frame)
+                            e.snapshot_path = str(snap_path)
+                        except Exception:
+                            pass
                     for e in events:
                         if _is_placeholder(e.person):
                             pending_events[e.track_id] = e

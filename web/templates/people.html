@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}People - VisionAttend AI{% endblock %}
+{% block page_title %}People Management{% endblock %}
+{% block content %}
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+    <div>
+        <p class="font-body-md text-body-md text-on-surface-variant">Manage personnel records and facial recognition embeddings.</p>
+    </div>
+    <div class="flex items-center gap-3">
+        <button onclick="openModal('addModal')" class="flex items-center gap-2 px-4 py-1.5 bg-primary text-on-primary rounded font-body-sm text-body-sm font-medium hover:bg-primary-fixed transition-colors shadow-[0_0_15px_rgba(137,206,255,0.2)]">
+            <span class="material-symbols-outlined text-[18px]">person_add</span> Add Person
+        </button>
+    </div>
+</div>
+
+<!-- People Table -->
+<div class="bg-surface-container-high border border-outline-variant rounded-lg overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse">
+            <thead>
+                <tr class="border-b border-outline-variant bg-surface-container-low text-on-surface-variant font-label-caps text-label-caps">
+                    <th class="px-4 py-3 font-semibold">NAME</th>
+                    <th class="px-4 py-3 font-semibold">EMBEDDINGS</th>
+                    <th class="px-4 py-3 font-semibold">STATUS</th>
+                    <th class="px-4 py-3 font-semibold text-right">ACTIONS</th>
+                </tr>
+            </thead>
+            <tbody class="font-body-sm text-body-sm divide-y divide-outline-variant/30" id="people-table">
+                {% for p in people %}
+                <tr class="hover:bg-surface-container-highest/50 transition-colors" data-name="{{ p.name }}">
+                    <td class="px-4 py-3">
+                        <div class="flex items-center gap-3">
+                            <div class="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm">
+                                {{ p.name[0]|upper }}
+                            </div>
+                            <span class="font-medium text-on-surface">{{ p.name }}</span>
+                        </div>
+                    </td>
+                    <td class="px-4 py-3 text-on-surface-variant">{{ p.embedding_count }} vectors</td>
+                    <td class="px-4 py-3">
+                        <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-label-caps bg-secondary/15 text-secondary border border-secondary/20">ACTIVE</span>
+                    </td>
+                    <td class="px-4 py-3 text-right">
+                        <div class="flex items-center justify-end gap-1">
+                            <button onclick="renamePerson('{{ p.name }}')" class="p-1.5 hover:text-primary hover:bg-primary/10 rounded transition-colors" title="Rename">
+                                <span class="material-symbols-outlined text-[18px]">edit</span>
+                            </button>
+                            <button onclick="deletePerson('{{ p.name }}')" class="p-1.5 hover:text-error hover:bg-error/10 rounded transition-colors" title="Delete">
+                                <span class="material-symbols-outlined text-[18px]">delete</span>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="px-4 py-12 text-center text-on-surface-variant">
+                        <span class="material-symbols-outlined text-[48px] text-outline/30 block mb-2">group</span>
+                        No people registered yet. Click "Add Person" to enroll.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Add Person Modal -->
+<div id="addModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+    <div class="bg-[#161618] border border-outline-variant rounded-xl w-full max-w-lg shadow-2xl">
+        <div class="border-b border-outline-variant px-6 py-4 flex justify-between items-center">
+            <h3 class="font-headline-md text-headline-md text-on-surface">Add New Person</h3>
+            <button onclick="closeModal('addModal')" class="text-on-surface-variant hover:text-on-surface p-1 rounded-full hover:bg-surface-container-high">
+                <span class="material-symbols-outlined">close</span>
+            </button>
+        </div>
+        <div class="p-6 space-y-4">
+            <div>
+                <label class="block font-body-sm text-body-sm text-on-surface-variant mb-1">Full Name</label>
+                <input id="add-name" class="w-full bg-surface-container-lowest border border-outline-variant rounded px-3 py-2 text-body-sm text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50" type="text" placeholder="Enter person name"/>
+            </div>
+            <div>
+                <label class="block font-body-sm text-body-sm text-on-surface-variant mb-1">Face Photo (optional)</label>
+                <div class="border border-dashed border-outline-variant rounded-lg bg-surface-container-lowest p-6 text-center">
+                    <input type="file" id="add-photo" accept="image/*" class="hidden" onchange="previewPhoto(this)"/>
+                    <div id="photo-preview" class="hidden mb-3"><img class="w-20 h-20 rounded object-cover mx-auto"/></div>
+                    <button onclick="document.getElementById('add-photo').click()" class="px-3 py-1.5 bg-surface-container-high hover:bg-surface-container-highest rounded text-on-surface font-body-sm border border-outline-variant">
+                        <span class="material-symbols-outlined text-[16px] align-middle">upload</span> Upload Photo
+                    </button>
+                    <p class="font-body-sm text-[11px] text-outline mt-2">JPG, PNG. If provided, face embedding will be generated automatically.</p>
+                </div>
+            </div>
+        </div>
+        <div class="border-t border-outline-variant px-6 py-4 flex justify-end gap-3">
+            <button onclick="closeModal('addModal')" class="px-4 py-2 text-on-surface-variant hover:text-on-surface transition-colors">Cancel</button>
+            <button onclick="addPerson()" class="px-4 py-2 bg-primary text-on-primary rounded font-body-sm font-medium hover:bg-primary-fixed transition-colors flex items-center gap-2">
+                <span class="material-symbols-outlined text-[18px]">person_add</span> Add Person
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function openModal(id) { document.getElementById(id).classList.remove('hidden'); }
+function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+function previewPhoto(input) {
+    if (input.files && input.files[0]) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const preview = document.getElementById('photo-preview');
+            preview.querySelector('img').src = e.target.result;
+            preview.classList.remove('hidden');
+        };
+        reader.readAsDataURL(input.files[0]);
+    }
+}
+
+async function addPerson() {
+    const name = document.getElementById('add-name').value.trim();
+    if (!name) { showToast('Name required', 'error'); return; }
+    const fileInput = document.getElementById('add-photo');
+    let imageData = null;
+    if (fileInput.files && fileInput.files[0]) {
+        imageData = await new Promise(resolve => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.readAsDataURL(fileInput.files[0]);
+        });
+    }
+    const body = { name };
+    if (imageData) body.image = imageData;
+    const r = await apiCall('/api/people', 'POST', body);
+    showToast(r.message || r.error, r.ok ? 'success' : 'error');
+    if (r.ok) { closeModal('addModal'); setTimeout(() => location.reload(), 500); }
+}
+
+async function deletePerson(name) {
+    if (!confirm(`Delete "${name}"? This will remove all face embeddings.`)) return;
+    const r = await apiCall(`/api/people/${encodeURIComponent(name)}`, 'DELETE');
+    showToast(r.message || r.error, r.ok ? 'success' : 'error');
+    if (r.ok) { document.querySelector(`tr[data-name="${name}"]`)?.remove(); }
+}
+
+async function renamePerson(oldName) {
+    const newName = prompt(`Rename "${oldName}" to:`, oldName);
+    if (!newName || newName.trim() === oldName) return;
+    const r = await apiCall(`/api/people/${encodeURIComponent(oldName)}`, 'PUT', {name: newName.trim()});
+    showToast(r.message || r.error, r.ok ? 'success' : 'error');
+    if (r.ok) setTimeout(() => location.reload(), 500);
+}
+</script>
+{% endblock %}

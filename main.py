@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -12,12 +13,34 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+_SITE = Path(__file__).resolve().parent / ".venv" / "Lib" / "site-packages"
+_ORT_CAPI = _SITE / "onnxruntime" / "capi"
+for _sub in ("nvidia\\cudnn\\bin", "nvidia\\cublas\\bin", "nvidia\\cuda_runtime\\bin", "nvidia\\cufft\\bin"):
+    _d = _SITE / _sub
+    if _d.is_dir():
+        os.add_dll_directory(str(_d))
+        os.environ["PATH"] = str(_d) + ";" + os.environ.get("PATH", "")
+if _ORT_CAPI.is_dir():
+    os.add_dll_directory(str(_ORT_CAPI))
+    os.environ["PATH"] = str(_ORT_CAPI) + ";" + os.environ.get("PATH", "")
+
 from src.utils.config import load_settings
 from src.pipeline.runner import run_pipeline
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the person/face events pipeline.")
+    parser.add_argument(
+        "--web",
+        action="store_true",
+        help="Launch the Flask web dashboard (http://localhost:5000).",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=5000,
+        help="Web dashboard port (default: 5000).",
+    )
     parser.add_argument(
         "--source",
         default=None,
@@ -61,6 +84,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+
+    if args.web:
+        from web.app import app, socketio
+        print(f"[Web] Starting VisionAttend AI dashboard at http://localhost:{args.port}")
+        socketio.run(app, host="0.0.0.0", port=args.port, debug=False, allow_unsafe_werkzeug=True)
+        return
+
     cfg = load_settings(args.config)
     while True:
         try:

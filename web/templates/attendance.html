@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Attendance - VisionAttend AI{% endblock %}
+{% block page_title %}Attendance{% endblock %}
+{% block content %}
+<div class="mb-6 flex justify-between items-center">
+    <div>
+        <p class="font-body-md text-body-md text-on-surface-variant">Daily attendance records for <span class="text-on-surface font-medium">{{ today }}</span></p>
+    </div>
+</div>
+<div class="bg-surface-container-high border border-outline-variant rounded-lg overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse">
+            <thead>
+                <tr class="border-b border-outline-variant bg-surface-container-low text-on-surface-variant font-label-caps text-label-caps">
+                    <th class="px-4 py-3 font-semibold">PERSON</th>
+                    <th class="px-4 py-3 font-semibold">CHECK IN</th>
+                    <th class="px-4 py-3 font-semibold">CHECK OUT</th>
+                    <th class="px-4 py-3 font-semibold">STATUS</th>
+                    <th class="px-4 py-3 font-semibold">HOURS</th>
+                </tr>
+            </thead>
+            <tbody class="font-body-sm text-body-sm divide-y divide-outline-variant/30">
+                {% for rec in records %}
+                <tr class="hover:bg-surface-container-highest/50 transition-colors">
+                    <td class="px-4 py-3 font-medium text-on-surface">{{ rec.person_name or rec.person_id }}</td>
+                    <td class="px-4 py-3 font-data-mono text-[11px] text-on-surface-variant">{{ rec.check_in_time or '--' }}</td>
+                    <td class="px-4 py-3 font-data-mono text-[11px] text-on-surface-variant">{{ rec.check_out_time or '--' }}</td>
+                    <td class="px-4 py-3">
+                        <span class="font-label-caps text-[10px] px-1.5 py-0.5 rounded
+                            {% if rec.status == 'present' %}bg-secondary/10 text-secondary
+                            {% elif rec.status == 'late' %}bg-tertiary/10 text-tertiary
+                            {% else %}bg-outline/10 text-outline{% endif %}">
+                            {{ rec.status|upper }}
+                        </span>
+                    </td>
+                    <td class="px-4 py-3 font-data-mono text-[11px] text-on-surface-variant">{{ rec.work_hours or '--' }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="px-4 py-12 text-center text-on-surface-variant">No attendance records for today</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

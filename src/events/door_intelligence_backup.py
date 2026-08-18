@@ -135,7 +135,7 @@ class DoorIntelligenceEngine:
             ev.id = store.insert(ev)
             produced.append(ev)
             self.counts[ev.direction] = self.counts.get(ev.direction, 0) + 1
-            self.counts["present"] = self.counts.get("present", 0) + (1 if ev.direction == "entry" else -1)
+            self.counts["present"] = self.counts.get("entry", 0) - self.counts.get("exit", 0)
         alive: set = set()
         for t in tracks:
             key = self._state_key(t)
@@ -159,22 +159,17 @@ class DoorIntelligenceEngine:
             if t.hits < self.min_track_frames:
                 # Warm-up: learn the zone, never emit until enough hits.
                 ft.state = TrackState.UNKNOWN
-                t.meta["fsm_state"] = "WARMUP"
-                t.meta["zone"] = zone
-                t.meta["direction"] = direction
-                t.prev_side = zone
             else:
                 event = self._step(ft, zone, direction, now)
                 t.meta["fsm_state"] = ft.state.name
                 t.meta["zone"] = zone
-                t.meta["direction"] = direction
                 t.prev_side = zone
 
                 if event is not None:
                     event.id = store.insert(event)
                     produced.append(event)
                     self.counts[event.direction] = self.counts.get(event.direction, 0) + 1
-                    self.counts["present"] = self.counts.get("present", 0) + (1 if event.direction == "entry" else -1)
+                    self.counts["present"] = self.counts.get("entry", 0) - self.counts.get("exit", 0)
                     ft.last_event = event.direction.upper()
 
         self._forget_removed(alive)

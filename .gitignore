@@ -3,6 +3,8 @@ data/db/*.db
 data/db/*.db-shm
 data/db/*.db-wal
 data/db/*.faiss
+data/db/events_redis_fallback.jsonl
+data/db/identity_state.json
 
 # Face gallery images (personal data)
 data/faces_gallery/
@@ -11,9 +13,13 @@ data/faces_gallery/
 models/yolo/*.onnx
 models/yolo/*.pt
 models/face/models/
+models/face/*.onnx
+models/yolo11n/
 
 # Local config with credentials
 config/go2rtc.yaml
+config/settings.yaml.bak
+config/zones.yaml.bak
 
 # go2rtc binary / zip (downloaded by scripts/start_go2rtc.sh)
 /go2rtc
@@ -37,6 +43,15 @@ data/output_*.mp4
 # Temp
 /tmp/
 *.tmp
-This
-plan.md
-threshold
+sample.png
+
+# Test files
+test_rtsp.py
+test_zones.py
+check_db.py
+verify_fixes.py
+
+# Summary docs
+ENTRY_EXIT_FIX_SUMMARY.md
+FINAL_FIX.md
+FIX_PERSON_OUTSIDE_SHOWS_INSIDE.md
