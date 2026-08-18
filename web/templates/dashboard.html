@@ -94,6 +94,22 @@
                 </div>
             </div>
             <div class="flex justify-between items-center">
+                <span class="text-on-surface-variant font-body-sm">CPU</span>
+                <span class="font-data-mono text-data-mono text-on-surface" id="dash-cpu">--%</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-on-surface-variant font-body-sm">CPU Temp</span>
+                <span class="font-data-mono text-data-mono" id="dash-cpu-temp">--</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-on-surface-variant font-body-sm">GPU Temp</span>
+                <span class="font-data-mono text-data-mono" id="dash-gpu-temp">--</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-on-surface-variant font-body-sm">RAM</span>
+                <span class="font-data-mono text-data-mono text-on-surface" id="dash-ram">--%</span>
+            </div>
+            <div class="flex justify-between items-center">
                 <span class="text-on-surface-variant font-body-sm">Total Events</span>
                 <span class="font-data-mono text-data-mono text-on-surface">{{ total_events }}</span>
             </div>
@@ -155,6 +171,24 @@ async function refreshStatus() {
     if (stateEl) stateEl.textContent = r.running ? 'RUNNING' : 'STOPPED';
     if (framesEl) framesEl.textContent = r.frames + ' frames';
 }
+async function refreshDashMetrics() {
+    try {
+        const r = await fetch('/api/system/metrics');
+        const d = await r.json();
+        document.getElementById('dash-cpu').textContent = d.cpu.percent + '%';
+        const ct = d.cpu_temp;
+        const ctEl = document.getElementById('dash-cpu-temp');
+        ctEl.textContent = ct !== null ? Math.round(ct) + '°C' : 'N/A';
+        ctEl.className = 'font-data-mono text-data-mono ' + (ct !== null && ct > 80 ? 'text-error' : 'text-on-surface');
+        const gt = d.gpu_temp;
+        const gtEl = document.getElementById('dash-gpu-temp');
+        gtEl.textContent = gt !== null ? Math.round(gt) + '°C' : 'N/A';
+        gtEl.className = 'font-data-mono text-data-mono ' + (gt !== null && gt > 85 ? 'text-error' : 'text-on-surface');
+        document.getElementById('dash-ram').textContent = d.ram.percent + '% (' + d.ram.used_gb + '/' + d.ram.total_gb + ' GB)';
+    } catch(e) {}
+}
 setInterval(refreshStatus, 3000);
+setInterval(refreshDashMetrics, 5000);
+refreshDashMetrics();
 </script>
 {% endblock %}

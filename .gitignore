@@ -14,6 +14,7 @@ models/yolo/*.onnx
 models/yolo/*.pt
 models/face/models/
 models/face/*.onnx
+models/face/buffalo_s/
 models/yolo11n/
 
 # Local config with credentials

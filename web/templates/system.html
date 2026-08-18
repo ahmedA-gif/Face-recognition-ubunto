@@ -2,8 +2,99 @@
 {% block title %}System - VisionAttend AI{% endblock %}
 {% block page_title %}System{% endblock %}
 {% block content %}
+<!-- Live System Metrics -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <!-- CPU Usage -->
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-4 card-hover transition-all">
+        <div class="flex justify-between items-start mb-3">
+            <span class="font-label-caps text-label-caps text-on-surface-variant uppercase">CPU</span>
+            <span class="material-symbols-outlined text-primary text-[20px]">developer_board</span>
+        </div>
+        <div class="flex items-end gap-3">
+            <span class="font-display text-[32px] font-bold text-on-surface leading-none" id="cpu-pct">--</span>
+            <span class="text-on-surface-variant font-body-sm mb-1">%</span>
+        </div>
+        <div class="w-full bg-surface-container-lowest h-1.5 rounded-full overflow-hidden mt-3">
+            <div id="cpu-bar" class="bg-primary h-full rounded-full transition-all duration-500" style="width:0%"></div>
+        </div>
+        <div class="font-data-mono text-[10px] text-outline mt-2" id="cpu-cores">-- cores</div>
+    </div>
+
+    <!-- CPU Temperature -->
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-4 card-hover transition-all">
+        <div class="flex justify-between items-start mb-3">
+            <span class="font-label-caps text-label-caps text-on-surface-variant uppercase">CPU Temp</span>
+            <span class="material-symbols-outlined text-[20px]" id="temp-icon">thermostat</span>
+        </div>
+        <div class="flex items-end gap-3">
+            <span class="font-display text-[32px] font-bold leading-none" id="cpu-temp">--</span>
+            <span class="text-on-surface-variant font-body-sm mb-1">°C</span>
+        </div>
+        <div class="w-full bg-surface-container-lowest h-1.5 rounded-full overflow-hidden mt-3">
+            <div id="temp-bar" class="h-full rounded-full transition-all duration-500" style="width:0%"></div>
+        </div>
+        <div class="font-data-mono text-[10px] text-outline mt-2" id="temp-status">--</div>
+    </div>
+
+    <!-- GPU Temperature -->
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-4 card-hover transition-all">
+        <div class="flex justify-between items-start mb-3">
+            <span class="font-label-caps text-label-caps text-on-surface-variant uppercase">GPU Temp</span>
+            <span class="material-symbols-outlined text-secondary text-[20px]">memory</span>
+        </div>
+        <div class="flex items-end gap-3">
+            <span class="font-display text-[32px] font-bold text-on-surface leading-none" id="gpu-temp">--</span>
+            <span class="text-on-surface-variant font-body-sm mb-1">°C</span>
+        </div>
+        <div class="w-full bg-surface-container-lowest h-1.5 rounded-full overflow-hidden mt-3">
+            <div id="gpu-temp-bar" class="bg-secondary h-full rounded-full transition-all duration-500" style="width:0%"></div>
+        </div>
+        <div class="font-data-mono text-[10px] text-outline mt-2" id="gpu-util">--</div>
+    </div>
+
+    <!-- RAM -->
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-4 card-hover transition-all">
+        <div class="flex justify-between items-start mb-3">
+            <span class="font-label-caps text-label-caps text-on-surface-variant uppercase">RAM</span>
+            <span class="material-symbols-outlined text-tertiary text-[20px]">sd_card</span>
+        </div>
+        <div class="flex items-end gap-3">
+            <span class="font-display text-[32px] font-bold text-on-surface leading-none" id="ram-pct">--</span>
+            <span class="text-on-surface-variant font-body-sm mb-1">%</span>
+        </div>
+        <div class="w-full bg-surface-container-lowest h-1.5 rounded-full overflow-hidden mt-3">
+            <div id="ram-bar" class="bg-tertiary h-full rounded-full transition-all duration-500" style="width:0%"></div>
+        </div>
+        <div class="font-data-mono text-[10px] text-outline mt-2" id="ram-detail">-- / -- GB</div>
+    </div>
+</div>
+
+<!-- Secondary Metrics -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <!-- GPU VRAM -->
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-3">
+        <span class="font-label-caps text-label-caps text-on-surface-variant uppercase text-[10px]">GPU VRAM</span>
+        <div class="font-data-mono text-data-mono text-on-surface mt-1" id="vram-info">--</div>
+    </div>
+    <!-- Disk -->
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-3">
+        <span class="font-label-caps text-label-caps text-on-surface-variant uppercase text-[10px]">Disk</span>
+        <div class="font-data-mono text-data-mono text-on-surface mt-1" id="disk-info">--</div>
+    </div>
+    <!-- Network -->
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-3">
+        <span class="font-label-caps text-label-caps text-on-surface-variant uppercase text-[10px]">Network</span>
+        <div class="font-data-mono text-data-mono text-on-surface mt-1" id="net-info">--</div>
+    </div>
+    <!-- Uptime -->
+    <div class="bg-surface-container-high border border-outline-variant rounded-lg p-3">
+        <span class="font-label-caps text-label-caps text-on-surface-variant uppercase text-[10px]">Uptime</span>
+        <div class="font-data-mono text-data-mono text-on-surface mt-1" id="uptime-info">--</div>
+    </div>
+</div>
+
+<!-- Hardware & Models -->
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-    <!-- Hardware -->
     <div class="bg-surface-container-high border border-outline-variant rounded-lg p-6">
         <h3 class="font-headline-md text-headline-md font-semibold text-on-surface mb-4">Hardware</h3>
         <div class="space-y-3">
@@ -26,7 +117,6 @@
         </div>
     </div>
 
-    <!-- Models -->
     <div class="bg-surface-container-high border border-outline-variant rounded-lg p-6">
         <h3 class="font-headline-md text-headline-md font-semibold text-on-surface mb-4">Loaded Models</h3>
         <div class="space-y-3">
@@ -42,7 +132,7 @@
     <!-- GPU/CPU Switch -->
     <div class="bg-surface-container-high border border-outline-variant rounded-lg p-6">
         <h3 class="font-headline-md text-headline-md font-semibold text-on-surface mb-4">Compute Mode</h3>
-        <p class="text-on-surface-variant font-body-sm mb-4">Switch between GPU and CPU inference. GPU requires CUDA-compatible hardware.</p>
+        <p class="text-on-surface-variant font-body-sm mb-4">Switch between GPU and CPU. Auto-switches when VRAM exceeded.</p>
         <div class="flex gap-3">
             <button onclick="switchMode('gpu')" class="flex-1 px-4 py-3 rounded-lg border-2 transition-all text-center
                 {% if gpu_mode %}border-secondary bg-secondary/10 text-secondary{% else %}border-outline-variant text-on-surface-variant hover:border-outline{% endif %}">
@@ -78,6 +168,61 @@
 
 {% block scripts %}
 <script>
+function tempColor(temp) {
+    if (temp === null) return 'bg-outline';
+    if (temp < 50) return 'bg-secondary';
+    if (temp < 70) return 'bg-primary';
+    if (temp < 85) return 'bg-tertiary';
+    return 'bg-error';
+}
+
+function tempStatus(temp) {
+    if (temp === null) return 'Sensor N/A';
+    if (temp < 50) return 'Cool';
+    if (temp < 70) return 'Normal';
+    if (temp < 85) return 'Warm';
+    return 'HOT - throttling risk';
+}
+
+async function refreshMetrics() {
+    try {
+        const r = await fetch('/api/system/metrics');
+        const d = await r.json();
+        // CPU
+        document.getElementById('cpu-pct').textContent = d.cpu.percent;
+        document.getElementById('cpu-bar').style.width = d.cpu.percent + '%';
+        document.getElementById('cpu-cores').textContent = d.cpu.cores + ' cores / ' + d.cpu.threads + ' threads';
+        // CPU Temp
+        const ct = d.cpu_temp;
+        document.getElementById('cpu-temp').textContent = ct !== null ? Math.round(ct) : '--';
+        document.getElementById('temp-bar').style.width = (ct !== null ? Math.min(ct, 100) : 0) + '%';
+        document.getElementById('temp-bar').className = 'h-full rounded-full transition-all duration-500 ' + tempColor(ct);
+        document.getElementById('temp-icon').className = 'material-symbols-outlined text-[20px] ' + (ct !== null && ct > 80 ? 'text-error' : 'text-primary');
+        document.getElementById('temp-status').textContent = tempStatus(ct);
+        // GPU Temp
+        const gt = d.gpu_temp;
+        document.getElementById('gpu-temp').textContent = gt !== null ? Math.round(gt) : '--';
+        document.getElementById('gpu-temp-bar').style.width = (gt !== null ? Math.min(gt, 100) : 0) + '%';
+        document.getElementById('gpu-util').textContent = d.gpu_vram.utilization_pct !== null ? 'Util: ' + d.gpu_vram.utilization_pct + '%' : 'N/A';
+        // RAM
+        document.getElementById('ram-pct').textContent = d.ram.percent;
+        document.getElementById('ram-bar').style.width = d.ram.percent + '%';
+        document.getElementById('ram-detail').textContent = d.ram.used_gb + ' / ' + d.ram.total_gb + ' GB';
+        // VRAM
+        if (d.gpu_vram.total_mb) {
+            document.getElementById('vram-info').textContent = Math.round(d.gpu_vram.used_mb) + ' / ' + Math.round(d.gpu_vram.total_mb) + ' MB';
+        } else {
+            document.getElementById('vram-info').textContent = 'N/A';
+        }
+        // Disk
+        document.getElementById('disk-info').textContent = d.disk.used_gb + ' / ' + d.disk.total_gb + ' GB (' + d.disk.percent + '%)';
+        // Network
+        document.getElementById('net-info').textContent = '↑' + d.network.sent_rate_kb + ' KB/s ↓' + d.network.recv_rate_kb + ' KB/s';
+        // Uptime
+        document.getElementById('uptime-info').textContent = d.uptime.formatted;
+    } catch(e) {}
+}
+
 async function switchMode(mode) {
     const r = await apiCall('/api/gpu/switch', 'POST', {mode});
     showToast(r.ok ? `Switched to ${mode.toUpperCase()} mode` : r.error, r.ok ? 'success' : 'error');
@@ -93,5 +238,8 @@ async function stopPipeline() {
     showToast(r.message || r.error, r.ok ? 'success' : 'error');
     setTimeout(() => location.reload(), 1000);
 }
+
+setInterval(refreshMetrics, 3000);
+refreshMetrics();
 </script>
 {% endblock %}

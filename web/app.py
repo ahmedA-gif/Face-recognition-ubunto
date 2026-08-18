@@ -367,6 +367,12 @@ def api_gpu_status():
     return jsonify(gpu_monitor.get_status())
 
 
+@app.route("/api/system/metrics")
+def api_system_metrics():
+    from src.hardware.system_monitor import system_monitor
+    return jsonify(system_monitor.get_all())
+
+
 @app.route("/api/gpu/switch", methods=["POST"])
 def api_gpu_switch():
     global _gpu_mode, _current_config
