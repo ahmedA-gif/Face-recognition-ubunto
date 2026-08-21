@@ -45,10 +45,10 @@ crossing_line:
   enabled: true
   line:
     x1: 0.1
-    y1: 0.83
+    y1: 0.95
     x2: 0.9
-    y2: 0.83
-  entry_direction: downward  # camera looks out; people enter by moving DOWN (y increases)
+    y2: 0.95
+  entry_direction: downward  # camera inside looking at door; people enter by walking DOWN into room
   min_track_frames: 3
   cooldown_sec: 2.0
   min_crossing_gap_sec: 1.0

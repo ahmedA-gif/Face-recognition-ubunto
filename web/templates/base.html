@@ -90,6 +90,10 @@
                 <span class="material-symbols-outlined {% if request.endpoint == 'people' %}icon-fill{% endif %}">group</span>
                 <span class="font-body-md text-body-md">People</span>
             </a>
+            <a class="flex items-center gap-3 px-4 py-2 border-l-2 border-transparent text-on-surface-variant hover:bg-surface-container-high transition-all cursor-pointer {% if request.endpoint == 'snapshots' %}nav-active{% endif %}" href="/snapshots">
+                <span class="material-symbols-outlined {% if request.endpoint == 'snapshots' %}icon-fill{% endif %}">photo_camera</span>
+                <span class="font-body-md text-body-md">Snapshots</span>
+            </a>
             <a class="flex items-center gap-3 px-4 py-2 border-l-2 border-transparent text-on-surface-variant hover:bg-surface-container-high transition-all cursor-pointer {% if request.endpoint == 'cameras' %}nav-active{% endif %}" href="/cameras">
                 <span class="material-symbols-outlined {% if request.endpoint == 'cameras' %}icon-fill{% endif %}">videocam_sensor</span>
                 <span class="font-body-md text-body-md">Cameras</span>

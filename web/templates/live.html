@@ -13,24 +13,28 @@
                 </span>
                 <h2 class="font-data-mono text-data-mono text-on-surface">CAM_01_MAIN_ENTRANCE</h2>
             </div>
-            <div class="flex gap-2">
-                <button onclick="startPipeline()" class="px-3 py-1 bg-secondary/20 text-secondary border border-secondary/30 rounded text-[11px] font-label-caps hover:bg-secondary/30 transition-colors">
+            <div class="flex gap-2 items-center">
+                <span id="frame-count" class="font-data-mono text-data-mono text-on-surface-variant text-[11px]"></span>
+                <button onclick="startPipeline()" id="btn-start" class="px-3 py-1 bg-secondary/20 text-secondary border border-secondary/30 rounded text-[11px] font-label-caps hover:bg-secondary/30 transition-colors">
                     START
                 </button>
-                <button onclick="stopPipeline()" class="px-3 py-1 bg-error/20 text-error border border-error/30 rounded text-[11px] font-label-caps hover:bg-error/30 transition-colors">
+                <button onclick="stopPipeline()" id="btn-stop" class="px-3 py-1 bg-error/20 text-error border border-error/30 rounded text-[11px] font-label-caps hover:bg-error/30 transition-colors">
                     STOP
                 </button>
             </div>
         </div>
-        <!-- Video Placeholder -->
+        <!-- Error banner -->
+        <div id="error-banner" class="hidden bg-error/10 border-b border-error/30 px-md py-2 shrink-0">
+            <p class="font-body-sm text-body-sm text-error" id="error-text"></p>
+        </div>
+        <!-- Video -->
         <div class="flex-1 relative bg-black overflow-hidden flex items-center justify-center">
-            <img id="live-stream" class="w-full h-full object-contain" src="/video_feed" alt="Live Feed" onerror="this.style.display='none';document.getElementById('video-placeholder').style.display='block'"/>
-            <div id="video-placeholder" class="text-center" style="display:none">
+            <img id="live-stream" class="w-full h-full object-contain" src="/video_feed" alt="Live Feed"/>
+            <div id="video-placeholder" class="text-center hidden">
                 <span class="material-symbols-outlined text-[64px] text-outline/40">videocam</span>
-                <p class="text-on-surface-variant font-body-sm mt-2">{{ "Streaming..." if pipeline_running else "Pipeline stopped" }}</p>
-                <p class="text-outline font-data-mono text-[11px] mt-1">Start pipeline to see live feed</p>
+                <p class="text-on-surface-variant font-body-sm mt-2">Pipeline stopped</p>
+                <p class="text-outline font-data-mono text-[11px] mt-1">Click START to begin</p>
             </div>
-            <!-- Timestamp overlay -->
             <div class="absolute bottom-4 left-4 font-data-mono text-data-mono text-on-surface bg-surface-container-highest/80 backdrop-blur px-2 py-1 rounded border border-outline-variant">
                 <span id="live-timestamp"></span>
             </div>
@@ -56,11 +60,22 @@
 {% block scripts %}
 <script>
 async function startPipeline() {
+    const btn = document.getElementById('btn-start');
+    btn.textContent = 'STARTING...';
+    btn.disabled = true;
     const r = await apiCall('/api/pipeline/start', 'POST', {});
     showToast(r.message || r.error, r.ok ? 'success' : 'error');
-    setTimeout(() => location.reload(), 2000);
+    if (r.ok) {
+        setTimeout(() => location.reload(), 2000);
+    } else {
+        btn.textContent = 'START';
+        btn.disabled = false;
+    }
 }
 async function stopPipeline() {
+    const btn = document.getElementById('btn-stop');
+    btn.textContent = 'STOPPING...';
+    btn.disabled = true;
     const r = await apiCall('/api/pipeline/stop', 'POST', {});
     showToast(r.message || r.error, r.ok ? 'success' : 'error');
     setTimeout(() => location.reload(), 2000);
@@ -94,17 +109,28 @@ async function refreshPipelineStatus() {
     try {
         const r = await fetch('/api/pipeline/status');
         const s = await r.json();
-        const badge = document.querySelector('.animate-pulse');
-        const liveLabel = badge ? badge.parentElement : null;
+        const liveLabel = document.querySelector('.animate-pulse, .bg-error.rounded-full');
         if (liveLabel) {
-            badge.className = `w-1.5 h-1.5 bg-error rounded-full ${s.running ? 'animate-pulse' : ''}`;
-            liveLabel.childNodes[2].textContent = s.running ? ' LIVE' : ' OFFLINE';
+            liveLabel.className = `w-1.5 h-1.5 bg-error rounded-full ${s.running ? 'animate-pulse' : ''}`;
+            const parent = liveLabel.parentElement;
+            if (parent) parent.childNodes[2].textContent = s.running ? ' LIVE' : ' OFFLINE';
         }
+        const errBanner = document.getElementById('error-banner');
+        const errText = document.getElementById('error-text');
+        if (s.error && s.error.length > 0) {
+            errBanner.classList.remove('hidden');
+            errText.textContent = s.error.split('\n')[0];
+        } else {
+            errBanner.classList.add('hidden');
+        }
+        const frameEl = document.getElementById('frame-count');
+        if (frameEl && s.frames) frameEl.textContent = 'frames: ' + s.frames;
     } catch(e) {}
 }
 setInterval(refreshLiveEvents, 3000);
 setInterval(refreshPipelineStatus, 3000);
 refreshLiveEvents();
+refreshPipelineStatus();
 function updateTimestamp() {
     const el = document.getElementById('live-timestamp');
     if (el) el.textContent = new Date().toLocaleString();

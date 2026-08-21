@@ -283,6 +283,8 @@ def run_pipeline(
     max_frames: int | None = None,
     skip_frames: int | None = None,
     face_every_n: int | None = None,
+    on_frame=None,
+    stop_event=None,
 ) -> PipelineResult:
     cam_cfg = cfg["camera"]
     pipe = cfg["pipeline"]
@@ -500,8 +502,8 @@ def run_pipeline(
                     if n != last_boundary_progress and n > 0 and n % 10 == 0:
                         print(f"[Boundary] learning… {n}/{total} trajectory vectors")
                         last_boundary_progress = n
-                elif not boundary_applied and overlay.show_boundary and not using_polygon_or_line:
-                    # Auto-learning disabled → draw the static configured line
+                elif not boundary_applied and overlay.show_boundary:
+                    # Draw the static configured line (works for all engine types)
                     overlay.set_boundary(event_engine.line_norm, label="BOUNDARY")
                     boundary_applied = True
 
@@ -535,7 +537,6 @@ def run_pipeline(
                 if events:
                     total_events += len(events)
                     now_t = time.time()
-                    # Save snapshots for each event
                     _snap_dir = Path(cfg.get("events", {}).get("snapshots_dir", "data/snapshots"))
                     _snap_dir.mkdir(parents=True, exist_ok=True)
                     for e in events:
@@ -544,8 +545,14 @@ def run_pipeline(
                             snap_path = _snap_dir / snap_name
                             cv2.imwrite(str(snap_path), frame)
                             e.snapshot_path = str(snap_path)
-                        except Exception:
-                            pass
+                            if e.id is not None:
+                                store._conn.execute(
+                                    "UPDATE events SET snapshot_path = ? WHERE id = ?",
+                                    (str(snap_path), e.id),
+                                )
+                                store._conn.commit()
+                        except Exception as exc:
+                            print(f"[Pipeline] snapshot error: {exc}")
                     for e in events:
                         if _is_placeholder(e.person):
                             pending_events[e.track_id] = e
@@ -568,6 +575,15 @@ def run_pipeline(
                         last_fused = total_fused
 
                 vis = overlay.draw(frame, tracks, last_faces, event_engine.counts)
+
+                if on_frame is not None:
+                    try:
+                        on_frame(vis, event_engine.counts)
+                    except Exception:
+                        pass
+
+                if stop_event is not None and stop_event.is_set():
+                    break
 
                 if output_file is not None and writer is None:
                     fps = float(stream.cap.get(cv2.CAP_PROP_FPS)) if stream.cap is not None else 0.0

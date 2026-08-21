@@ -114,8 +114,13 @@ class OverlayRenderer:
         self._zones_px: Dict[str, np.ndarray] = {}  # region -> pixel polygon
         self._zone_pulses: Dict[str, int] = defaultdict(int)  # region -> remaining frames
 
-    def set_boundary(self, line_norm: Dict[str, float], label: str = "BOUNDARY") -> None:
-        self.boundary_line = dict(line_norm)
+    def set_boundary(self, line_norm, label: str = "BOUNDARY") -> None:
+        if isinstance(line_norm, (list, tuple)) and len(line_norm) == 4:
+            self.boundary_line = {"x1": line_norm[0], "y1": line_norm[1], "x2": line_norm[2], "y2": line_norm[3]}
+        elif isinstance(line_norm, dict):
+            self.boundary_line = dict(line_norm)
+        else:
+            self.boundary_line = line_norm
         self.boundary_label = label
 
     def set_zones(self, zones_px: Dict[str, List[Tuple[int, int]]]) -> None:

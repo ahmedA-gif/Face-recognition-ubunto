@@ -193,7 +193,8 @@ class CrossingLineEngine:
         if self.entry_direction == "upward":
             return "OUTSIDE" if cross < 0 else "INSIDE"
         elif self.entry_direction == "downward":
-            return "INSIDE" if cross < 0 else "OUTSIDE"
+            # downward entry: people end up below the line (cross>0) = INSIDE
+            return "INSIDE" if cross > 0 else "OUTSIDE"
         elif self.entry_direction == "rightward":
             return "OUTSIDE" if cross > 0 else "INSIDE"
         elif self.entry_direction == "leftward":

@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Snapshots - VisionAttend AI{% endblock %}
+{% block page_title %}Attendance Snapshots{% endblock %}
+{% block content %}
+<div class="mb-6 flex justify-between items-end">
+    <div>
+        <h2 class="font-headline-lg text-headline-lg font-semibold text-on-surface tracking-tight">Attendance Snapshots</h2>
+        <p class="font-body-md text-body-md text-on-surface-variant mt-1">Face captures at entry/exit events with person identification</p>
+    </div>
+    <div class="flex gap-2">
+        <button onclick="filterSnapshots('all')" id="btn-all" class="font-label-caps text-label-caps bg-primary-container text-on-primary px-3 py-1.5 rounded cursor-pointer transition-all">ALL</button>
+        <button onclick="filterSnapshots('entry')" id="btn-entry" class="font-label-caps text-label-caps bg-surface-container-high text-on-surface-variant px-3 py-1.5 rounded border border-outline-variant/50 cursor-pointer transition-all hover:bg-surface-container-highest">ENTRY</button>
+        <button onclick="filterSnapshots('exit')" id="btn-exit" class="font-label-caps text-label-caps bg-surface-container-high text-on-surface-variant px-3 py-1.5 rounded border border-outline-variant/50 cursor-pointer transition-all hover:bg-surface-container-highest">EXIT</button>
+        <button onclick="filterSnapshots('unknown')" id="btn-unknown" class="font-label-caps text-label-caps bg-surface-container-high text-on-surface-variant px-3 py-1.5 rounded border border-outline-variant/50 cursor-pointer transition-all hover:bg-surface-container-highest">UNKNOWN</button>
+    </div>
+</div>
+
+{% if not events %}
+<div class="bg-surface-container-high border border-outline-variant rounded-lg p-12 text-center">
+    <span class="material-symbols-outlined text-[48px] text-on-surface-variant/40">photo_camera</span>
+    <p class="font-headline-md text-headline-md text-on-surface-variant mt-4">No Snapshots Yet</p>
+    <p class="font-body-md text-body-md text-on-surface-variant/60 mt-2">Start the pipeline to capture attendance snapshots</p>
+</div>
+{% else %}
+
+<div class="mb-4 flex items-center gap-4">
+    <span class="font-data-mono text-data-mono text-on-surface-variant">{{ events|length }} snapshot{{ 's' if events|length != 1 }}</span>
+    <div class="flex-1"></div>
+    <input type="text" id="search-input" placeholder="Search by name..." class="bg-surface-container-high border border-outline-variant/50 rounded px-3 py-1.5 font-body-sm text-body-sm text-on-surface w-48 focus:outline-none focus:border-primary" oninput="searchSnapshots(this.value)">
+</div>
+
+<div id="snapshots-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+    {% for event in events|sort(attribute='id', reverse=True) %}
+    <div class="snap-card bg-surface-container-high border border-outline-variant rounded-lg overflow-hidden card-hover transition-all"
+         data-direction="{{ event.direction }}"
+         data-person="{{ event.person|default('Unknown', true)|lower }}"
+         data-name="{{ event.person|default('', true)|lower }}">
+        <div class="relative aspect-square bg-surface-container-highest">
+            {% if event.snapshot_path %}
+            <img src="/api/snapshot/{{ event.snapshot_path.replace('\\', '/')|split('/')|last }}" 
+                 alt="Snapshot" 
+                 class="w-full h-full object-cover"
+                 onerror="this.parentElement.innerHTML='<div class=\'flex items-center justify-center h-full\'><span class=\'material-symbols-outlined text-[40px] text-on-surface-variant/30\'>broken_image</span></div>'"
+                 loading="lazy">
+            {% else %}
+            <div class="flex items-center justify-center h-full">
+                <span class="material-symbols-outlined text-[40px] text-on-surface-variant/30">image_not_supported</span>
+            </div>
+            {% endif %}
+
+            <div class="absolute top-2 left-2">
+                {% if event.direction == 'entry' %}
+                <span class="bg-secondary/90 text-on-secondary font-label-caps text-label-caps px-2 py-0.5 rounded flex items-center gap-1">
+                    <span class="material-symbols-outlined text-[12px]">login</span> ENTRY
+                </span>
+                {% elif event.direction == 'exit' %}
+                <span class="bg-error/90 text-on-error font-label-caps text-label-caps px-2 py-0.5 rounded flex items-center gap-1">
+                    <span class="material-symbols-outlined text-[12px]">logout</span> EXIT
+                </span>
+                {% endif %}
+            </div>
+
+            {% if not event.person or event.person == 'Unknown' or event.person.startswith('Guest#') or event.person.startswith('ID:') %}
+            <div class="absolute top-2 right-2">
+                <span class="bg-amber-600/90 text-white font-label-caps text-label-caps px-2 py-0.5 rounded flex items-center gap-1">
+                    <span class="material-symbols-outlined text-[12px]">person_off</span> UNKNOWN
+                </span>
+            </div>
+            {% endif %}
+        </div>
+        <div class="p-3">
+            <div class="font-body-md text-body-md font-semibold text-on-surface truncate">
+                {{ event.person if event.person and event.person != 'Unknown' else 'Unknown' }}
+            </div>
+            <div class="font-data-mono text-data-mono text-on-surface-variant text-xs mt-1 flex items-center gap-1">
+                <span class="material-symbols-outlined text-[12px]">schedule</span>
+                {{ event.date }} {{ event.time }}
+            </div>
+            <div class="font-data-mono text-data-mono text-on-surface-variant/60 text-xs mt-1">
+                conf: {{ '%.2f'|format(event.confidence) }} | track:{{ event.track_id }}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let currentFilter = 'all';
+    
+    function filterSnapshots(filter) {
+        currentFilter = filter;
+        document.querySelectorAll('[id^="btn-"]').forEach(btn => {
+            btn.className = 'font-label-caps text-label-caps bg-surface-container-high text-on-surface-variant px-3 py-1.5 rounded border border-outline-variant/50 cursor-pointer transition-all hover:bg-surface-container-highest';
+        });
+        const activeBtn = document.getElementById('btn-' + filter);
+        if (activeBtn) {
+            activeBtn.className = 'font-label-caps text-label-caps bg-primary-container text-on-primary px-3 py-1.5 rounded cursor-pointer transition-all';
+        }
+        
+        document.querySelectorAll('.snap-card').forEach(card => {
+            const dir = card.dataset.direction;
+            const person = card.dataset.person;
+            let show = false;
+            if (filter === 'all') show = true;
+            else if (filter === 'entry') show = dir === 'entry';
+            else if (filter === 'exit') show = dir === 'exit';
+            else if (filter === 'unknown') show = !person || person === 'unknown' || person.startsWith('guest#') || person.startsWith('id:');
+            card.style.display = show ? '' : 'none';
+        });
+    }
+    
+    function searchSnapshots(query) {
+        const q = query.toLowerCase();
+        document.querySelectorAll('.snap-card').forEach(card => {
+            const name = card.dataset.name || '';
+            card.style.display = name.includes(q) ? '' : 'none';
+        });
+    }
+</script>
+{% endblock %}
