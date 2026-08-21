@@ -1,234 +1,131 @@
-# Face Recognition Attendance System (Ubuntu)
+# VisionAttend AI — CCTV Attendance System
 
-Real-time face recognition + person tracking attendance system with polygon-based door intelligence, a geometry-based Category 1 event engine (9 events), hardware auto-detection, Redis Streams event bus, and SQLite storage. Designed for a live Dahua CCTV camera on Ubuntu.
-
-## Architecture
-
-```
-CCTV Camera (Dahua 192.168.2.112)
-    │
-    ▼
-go2rtc (RTSP proxy, port 8554)
-    │
-    ▼
-Hardware Auto-Detection ─► Model Loader (hot-swap)
-(NVIDIA/Intel/AMD/Coral/CPU)
-    │
-    ▼
-YOLOv11n (person detection) ─► ByteTrack (multi-object tracking)
-    │                                   │
-    ▼                                   ▼
-InsightFace buffalo_s           Identity Fusion (Re-ID)
-(face detection + embed)        (face > person-ReID > HSV)
-    │                                   │
-    └───────────┬───────────────────────┘
-                ▼
-  Category 1 Event Engine (9 geometry events)
-  ─ 5-layer entry/exit validation (≥98% accuracy)
-  ─ Zone engine (polygons, occupancy, intrusion)
-  ─ Rule engine (YAML configurable)
-  ─ Door Intelligence Engine (polygon FSM)
-        │           │           │
-        ▼           ▼           ▼
-    SQLite     Redis Streams   Overlay
-    (events)   (live bus)     (live display)
-        │           │
-        ▼           ▼
-    Attendance   Worker / API
-    (check-in)
-```
+Real-time face recognition + person tracking attendance system with a full web dashboard, crossing-line entry/exit detection, identity fusion, GPU auto-switch, and 24/7 operation. Connects to a live Dahua CCTV camera via RTSP.
 
 ## Features
 
-- **Person Detection**: YOLOv11n ONNX (CPU, ~416px, ~15ms/frame)
-- **Face Recognition**: InsightFace ArcFace (buffalo_s pack, 320x320 det)
-- **Multi-Object Tracking**: ByteTrack with identity fusion (Re-ID across track fragments)
-- **Category 1 Event Engine**: 9 geometry-based events (person/vehicle entered-exited, restricted-zone intrusion, line crossing, wrong direction, occupancy limit, zone entry/exit) — 99% deterministic
-- **5-Layer Entry/Exit Validation**: signed distance → 5-state FSM → trajectory validation → track continuity (occlusion + Re-ID) → deduplication (≥98% accuracy)
-- **Zone Engine**: polygon zones, occupancy counting, restricted-zone intrusion, loitering, object left-behind detection
-- **Rule Engine**: YAML-configurable AND/OR/NOT conditions, actions (log, notify, webhook, reject, tag), auto-reload
-- **Hardware Auto-Detection**: NVIDIA (TensorRT) / Intel iGPU (OpenVINO) / AMD (ROCm) / Coral TPU (TFLite) / CPU (ONNX) with automatic model selection
-- **Dynamic Optimizer**: auto-adjusts FPS, batch size and model based on CPU/GPU/memory/queue/motion
-- **Model Loader & Hot-Swap**: registry + framework-specific loaders, swap models without restart
-- **Person Re-ID (clothing-invariant)**: optional OSNet-style embeddings, signal priority `gallery name > face embedding > person-ReID > HSV`
-- **Polygon Door Intelligence**: Three-zone FSM (OUTSIDE / DOOR / INSIDE) with calibrated polygons — replaces the legacy virtual boundary line
-- **Redis Streams**: Real-time event bus (`attendance:events` stream) with JSONL fallback
-- **SQLite Storage**: WAL-mode event log with deduplication by event UUID
-- **Attendance Manager**: Auto check-in/check-out with Late/Early detection
-- **Live Overlay**: Bounding boxes, face labels, zone polygons, HUD
-- **Spatial-Temporal Reasoning**: U-turn/loitering detection, anti-tailgating alerts
-- **106 Unit Tests**: Door FSM, geometry, gallery, reasoning, attendance, category 1, Re-ID
+- **Web Dashboard** — 12-page Flask UI (http://localhost:5000): Dashboard, Live Monitoring, Snapshots, Attendance, People, Cameras, Events, Tracking, Analytics, Database, System, Settings
+- **Live Video Stream** — MJPEG streaming from pipeline to browser with bounding boxes, face labels, boundary line, HUD overlay
+- **Crossing-Line Entry/Exit** — ObjectCounter-style line crossing with Shapely intersection, per-track dedup, configurable direction (upward/downward/leftward/rightward)
+- **Face Recognition** — InsightFace ArcFace buffalo_s (320x320 det), FAISS gallery matching
+- **Person Detection** — YOLOv11n ONNX (GPU/CPU auto-detect)
+- **Multi-Object Tracking** — ByteTrack with identity fusion (face > appearance > person-ReID)
+- **Identity Fusion** — Stitching, face merges, appearance Re-ID across track fragments
+- **Attendance Snapshots** — Auto-captures face crop on entry/exit, shows on /snapshots page
+- **Name Unknown Persons** — Click "NAME IT" on snapshot to identify unknowns, auto-learns face embedding
+- **Attendance Manager** — Auto check-in/check-out, Late/Early detection, shift-based
+- **GPU Auto-Switch** — Monitors VRAM via nvidia-smi, falls back to CPU when exceeded, retries after cooldown
+- **System Monitor** — Live CPU/GPU temperature, RAM, disk, network gauges
+- **24/7 Operation** — Auto-restarts on stream loss, 5s retry with backoff
+- **Spatial-Temporal Reasoning** — U-turn/loitering detection, anti-tailgating, time-window bias
+- **Redis Streams** — Real-time event bus with JSONL fallback
+- **SQLite Storage** — WAL-mode events, attendance, face gallery databases
 
 ## Quick Start
 
-### Step 1: Clone and setup
+### 1. Clone and setup
 
 ```bash
 git clone https://github.com/ahmedA-gif/Face-recognition-ubunto.git
 cd Face-recognition-ubunto
-python3.12 -m venv .venv
-source .venv/bin/activate
+python -m venv .venv
+.\.venv\Scripts\activate          # Windows
+# source .venv/bin/activate       # Linux
 ```
 
-### Step 2: Install dependencies
+### 2. Install dependencies
 
 ```bash
-sudo apt update
-sudo apt install python3.12 python3.12-venv python3-pip ffmpeg libgl1-mesa-glx libglib2.0-0 redis-server
-
 pip install -r requirements.txt
-pip install faiss-cpu redis
+pip install flask flask-socketio shapely psutil wmi pywin32
 ```
 
-### Step 3: Start Redis
+### 3. Configure camera
 
-```bash
-sudo systemctl start redis
-# or
-redis-server --daemonize yes
+Edit `config/settings.yaml`:
 
-# Verify
-redis-cli ping
-# Should return: PONG
+```yaml
+camera:
+  source: rtsp://admin:password@192.168.2.112:554/cam/realmonitor?channel=1&subtype=1
+
+crossing_line:
+  enabled: true
+  line:
+    x1: 0.1
+    y1: 0.95    # adjust to your camera angle
+    x2: 0.9
+    y2: 0.95
+  entry_direction: downward  # upward/downward/leftward/rightward
 ```
 
-### Step 4: Download models
+### 4. Run
 
 ```bash
-# Recommended: auto-detect hardware and download matching models
-python3 scripts/download_models.py
-# or the shell version
-bash scripts/download_models.sh
+# Web dashboard (recommended)
+python main.py --web
+# Open http://localhost:5000 → Live Monitoring → START
 
-# Manual YOLO (person detection)
-mkdir -p models/yolo
-python3 -c "from ultralytics import YOLO; m=YOLO('yolo11n.pt'); m.export(format='onnx',imgsz=416,simplify=True,dynamic=False)"
-mv yolo11n.pt models/yolo/
-mv yolo11n.onnx models/yolo/
-
-# InsightFace buffalo_s (face detection + recognition)
-mkdir -p models/face/models
-python3 -c "from insightface.app import FaceAnalysis; app=FaceAnalysis(name='buffalo_s',root='models/face',providers=['CPUExecutionProvider']); app.prepare(ctx_id=-1,det_size=(320,320))"
-
-# Verify
-python3 scripts/check_models.py
-```
-
-`scripts/download_models.py` detects your hardware (NVIDIA/Intel/AMD/Coral/CPU) and downloads the best YOLO model + face models, converting to the right format (TensorRT/OpenVINO/TFLite/ONNX) and updating `settings.yaml`. Run `scripts/hardware_detect.sh` to check detection.
-
-### Step 5: Setup camera network
-
-Camera is connected via **direct Ethernet cable** (not WiFi).
-
-```bash
-# Check interfaces
-ip addr show
-
-# Assign IP to camera interface (replace INTERFACE_NAME)
-sudo ip addr add 192.168.2.100/24 dev INTERFACE_NAME
-sudo ip link set INTERFACE_NAME up
-
-# Test
-ping 192.168.2.112
-```
-
-### Step 6: Start go2rtc and run
-
-```bash
-# Terminal 1: go2rtc
-./scripts/start_go2rtc.sh
-
-# Terminal 2: Watch Redis events
-watch -n 2 "redis-cli XLEN attendance:events"
-
-# Terminal 3: Run pipeline
-source .venv/bin/activate
+# CLI mode (OpenCV window)
 python main.py
 ```
 
-### Step 7: Enroll faces
+### 5. Enroll faces
 
 ```bash
+# Via web: People page → Add Person → upload photo
+# Or via CLI:
 mkdir -p data/faces_gallery/YourName
-cp /path/to/photo.jpg data/faces_gallery/YourName/
-python3 scripts/enroll_faces.py
+cp photo.jpg data/faces_gallery/YourName/
+python scripts/enroll_faces.py
 ```
 
-## Polygon Door Zones
+## Architecture
 
-The system uses three polygon regions instead of a single virtual line. Calibrated from the camera frame in `config/zones.yaml`:
-
-```yaml
-camera_1:
-  zones:
-    outside:     # Visible outdoor area through door opening
-      - [0.33, 0.14]
-      - [0.70, 0.14]
-      - [0.70, 0.66]
-      - [0.33, 0.66]
-    door_corridor:  # Threshold band at door ground
-      - [0.29, 0.66]
-      - [0.73, 0.66]
-      - [0.73, 0.82]
-      - [0.29, 0.82]
-    inside:       # Room interior (concave polygon wrapping around door)
-      - [0.00, 0.00]
-      - [0.29, 0.00]
-      - [0.29, 0.14]
-      - [0.29, 0.66]
-      - [0.73, 0.66]
-      - [0.73, 0.14]
-      - [0.73, 0.00]
-      - [1.00, 0.00]
-      - [1.00, 1.00]
-      - [0.00, 1.00]
+```
+CCTV Camera (Dahua RTSP)
+        │
+        ▼
+CameraStream (OpenCV capture)
+        │
+        ▼
+YOLOv11n (person detection) ──► ByteTrack (tracking)
+        │                              │
+        ▼                              ▼
+InsightFace (face recognition)   Identity Fusion (Re-ID)
+        │                              │
+        └──────────┬───────────────────┘
+                   ▼
+         CrossingLine Engine (line crossing)
+                   │
+        ┌──────────┼──────────┐
+        ▼          ▼          ▼
+   Events DB   Attendance   Snapshots
+   (SQLite)    (check-in)   (face crops)
+        │          │
+        ▼          ▼
+   Web Dashboard (Flask)
+   - Live video stream (MJPEG)
+   - Events feed
+   - Snapshots + naming
+   - System monitoring
 ```
 
-**Recalibrate**: run `python3 scripts/calibrate_door_regions.py` and click the three regions on a camera frame.
+## Web Dashboard Pages
 
-## Redis Streams
-
-Events are published to `attendance:events` stream in real-time.
-
-### Monitor commands
-
-```bash
-# Event count (live)
-watch -n 2 "redis-cli XLEN attendance:events"
-
-# All events
-redis-cli XRANGE attendance:events - +
-
-# Latest event only
-redis-cli XREVRANGE attendance:events + - COUNT 1
-
-# Stream info
-redis-cli XINFO STREAM attendance:events
-```
-
-### Event payload
-
-```json
-{
-  "event_id": "uuid",
-  "camera_id": "office_entrance",
-  "track_id": 1,
-  "global_id": "Guest#001",
-  "employee_id": "Ahmed",
-  "event": "ENTRY",
-  "confidence": 0.87,
-  "fsm_path": ["OUTSIDE", "DOOR", "INSIDE"],
-  "timestamp": "2026-08-08T13:09:53Z",
-  "date": "2026-08-08",
-  "time": "18:09:51"
-}
-```
-
-### Worker (consume events)
-
-```bash
-python3 scripts/attendance_worker.py
-```
+| Page | Description |
+|------|-------------|
+| `/` | Overview: KPIs, today's events, attendance summary |
+| `/live` | Live video feed, start/stop pipeline, event feed |
+| `/snapshots` | Face captures with name unknown feature |
+| `/attendance` | Daily check-in/out table with status |
+| `/people` | CRUD for face gallery with enrollment |
+| `/cameras` | Camera management and status |
+| `/events` | Full event history |
+| `/tracking` | Real-time track visualization |
+| `/analytics` | Entry/exit charts and statistics |
+| `/database` | Backup/clear databases |
+| `/system` | CPU/GPU temp, RAM, disk monitoring |
+| `/settings` | Live config editing with YAML save |
 
 ## Configuration
 
@@ -236,136 +133,75 @@ All settings in `config/settings.yaml`:
 
 | Section | Key | Description |
 |---------|-----|-------------|
-| `door_intelligence.enabled` | `true` | Use polygon FSM (recommended) |
-| `door_intelligence.lock_after_event` | `false` | Allow same person re-entry |
-| `door_intelligence.min_inside_frames` | `3` | Stable frames before ENTRY fires |
-| `door_intelligence.min_outside_frames` | `3` | Stable frames before EXIT fires |
-| `redis.enabled` | `true` | Publish events to Redis |
-| `redis.stream` | `attendance:events` | Stream name |
+| `camera.source` | RTSP URL | Camera stream source |
+| `crossing_line.enabled` | `true` | Enable crossing-line detection |
+| `crossing_line.line` | `{x1,y1,x2,y2}` | Normalized line coordinates |
+| `crossing_line.entry_direction` | `downward` | Which direction = entry |
+| `crossing_line.min_track_frames` | `3` | Min frames before crossing check |
+| `crossing_line.cooldown_sec` | `2.0` | Min seconds between events |
 | `attendance.shift_start` | `09:00` | Shift start for Late detection |
 | `attendance.shift_end` | `17:00` | Shift end for Early exit detection |
-| `identity_fusion.person_reid_weights` | `""` | OSNet-style `.pt` weights (optional; HSV fallback otherwise) |
-| `identity_fusion.reid_match_threshold` | `0.82` | Cosine threshold for person-ReID embeddings |
-| `identity_fusion.reid_every_n` | `1` | Extract reID embedding every N frames |
-
-Category 1 event engine + rule engine are configured in `config/category1_events.yaml` (events, entry-exit v2 5-layer params, zone definitions, lines, optimization) and `config/category1_rules.yaml` (rules with AND/OR/NOT conditions, actions, priorities).
-
-### Running the Category 1 pipeline
-
-```bash
-python3 -m src.pipeline.category1_pipeline \
-    --config config/category1_events.yaml \
-    --source "rtsp://127.0.0.1:8554/cam_01" \
-    --display true
-```
+| `identity_fusion.enabled` | `true` | Enable identity fusion |
+| `pipeline.device` | `cuda:0` | Device (cuda:0 or cpu) |
+| `pipeline.skip_frames` | `2` | Process every Nth frame |
+| `pipeline.face_every_n` | `3` | Run face recognition every Nth frame |
+| `overlay.show_boundary` | `true` | Show crossing line on video |
+| `gpu.vram_threshold_gb` | `2.0` | VRAM limit before CPU fallback |
 
 ## Project Structure
 
 ```
 Face-recognition-ubunto/
-├── main.py                          # Entry point
-├── config/
-│   ├── settings.yaml                # All pipeline settings
-│   ├── zones.yaml                   # Door zone polygons
-│   ├── go2rtc.yaml                  # RTSP proxy config
-│   ├── category1_events.yaml        # Category 1 events, zones, lines, optimizer
-│   └── category1_rules.yaml         # Rule engine rules
+├── main.py                        # Entry point (--web for dashboard)
+├── config/settings.yaml           # All pipeline settings
 ├── src/
-│   ├── capture/stream.py            # Camera stream reader
-│   ├── detection/person_yolo.py     # YOLO person detector
+│   ├── capture/stream.py          # Camera RTSP reader
+│   ├── detection/person_yolo.py   # YOLO person detector
 │   ├── tracking/
-│   │   ├── bytetrack.py             # ByteTrack tracker
-│   │   ├── motion.py                # Kalman velocity smoother
-│   │   └── identity_fusion.py       # Re-ID across tracks
+│   │   ├── bytetrack.py           # ByteTrack tracker
+│   │   └── identity_fusion.py     # Re-ID across tracks
 │   ├── recognition/
-│   │   ├── face_engine.py           # InsightFace detection + embedding
-│   │   ├── gallery.py               # FAISS face gallery
-│   │   └── person_reid.py           # Optional clothing-invariant Re-ID
-│   ├── hardware/
-│   │   ├── detector.py              # GPU/CPU/TPU auto-detection
-│   │   ├── optimizer.py             # Dynamic performance optimizer
-│   │   └── model_loader.py          # Model registry + hot-swap
+│   │   ├── face_engine.py         # InsightFace detection + embedding
+│   │   └── gallery.py             # FAISS face gallery
 │   ├── events/
-│   │   ├── door_intelligence.py     # Polygon FSM engine (3-zone)
-│   │   ├── entry_exit.py            # Legacy line engine
-│   │   ├── entry_exit_v2.py         # 5-layer entry/exit validation
-│   │   ├── zone_engine.py           # Polygon zones, occupancy, intrusion
-│   │   ├── category1_engine.py      # Unified 9-event Category 1 engine
-│   │   ├── rules.py                 # YAML rule engine
-│   │   ├── store.py                 # SQLite event store
-│   │   └── redis_publisher.py       # Redis Streams publisher
-│   ├── pipeline/
-│   │   ├── runner.py                # Main pipeline runner
-│   │   └── category1_pipeline.py    # Category 1 pipeline with integration
-│   ├── reasoning/spatial_temporal.py # U-turn, tailgate, window bias
+│   │   ├── crossing_line.py       # Crossing-line entry/exit engine
+│   │   ├── store.py               # SQLite event store
+│   │   └── redis_publisher.py     # Redis Streams publisher
+│   ├── pipeline/runner.py         # Main pipeline (on_frame callback)
+│   ├── reasoning/spatial_temporal.py
 │   ├── attendance/
-│   │   ├── db.py                    # Attendance SQLite DB
-│   │   └── manager.py               # Check-in/check-out logic
-│   ├── overlay/draw.py              # Live visualization
+│   │   ├── db.py                  # Attendance SQLite DB
+│   │   └── manager.py             # Check-in/check-out logic
+│   ├── overlay/draw.py            # Live visualization
+│   ├── hardware/
+│   │   ├── gpu_monitor.py         # GPU VRAM auto-switch
+│   │   └── system_monitor.py      # CPU/GPU temp, RAM monitoring
 │   └── utils/
-│       ├── geometry.py              # Polygon math, point-in-polygon
-│       ├── config.py                # Settings + zone loader
-│       └── assign.py                # Face-to-track assignment
-├── scripts/
-│   ├── start_go2rtc.sh              # Start RTSP proxy
-│   ├── download_models.py           # Auto-detect HW + download models
-│   ├── download_models.sh           # Shell version of model downloader
-│   ├── hardware_detect.sh           # Hardware detection
-│   ├── enroll_faces.py              # Face enrollment
-│   ├── calibrate_door_regions.py    # Zone polygon calibration
-│   ├── attendance_worker.py         # Redis Stream consumer
-│   └── run_attendance.sh            # 24/7 service wrapper
-├── tests/                           # 106 unit tests
-│   ├── test_door_intelligence.py    # FSM state machine tests
-│   ├── test_fetch.py                # Store, gallery, perf tests
-│   ├── test_geometry.py             # Polygon geometry tests
-│   ├── test_reasoning_attendance.py # Reasoning + attendance tests
-│   ├── test_identity_fusion.py      # Re-ID tests
-│   ├── test_person_reid.py          # Person-ReID engine tests
-│   ├── test_category1_complete.py   # Category 1 engine tests
-│   └── test_implementation_verification.py # HW + integration tests
-└── data/
-    ├── faces_gallery/               # Enrolled face images
-    ├── db/                          # SQLite databases
-    └── snapshots/                   # Event face crops
-```
-
-## Known Issues
-
-| Issue | Status |
-|-------|--------|
-| **Appearance Re-ID false merge** — HSV body-histogram re-ID can merge two different people wearing similar-coloured clothes. Mitigated by the optional clothing-invariant person-ReID model (signal priority: face > person-ReID > HSV). | ⚠️ To fix fully |
-| **Guest counter burns IDs on fleeting tracks** — fixed: `_expire()` no longer calls `_new_guest()` for tracks that vanish before identity resolution. | ✅ Fixed |
-| **Output buffered when run via systemd** — pipeline logs only streamed to journald after `-u` (unbuffered) flag was added to `run_attendance.sh`. | ✅ Fixed |
-| **Entry/Exit false positives** (boundary jitter, tracker jumps, occlusion, bbox flicker, duplicates) — fixed with the 5-layer validation engine in `entry_exit_v2.py`. | ✅ Fixed |
-
-## Testing
-
-```bash
-source .venv/bin/activate
-
-# Run all 106 tests
-python -m pytest tests/ -v
-
-# Run door intelligence tests only
-python -m pytest tests/test_door_intelligence.py -v
-
-# Run Category 1 + Re-ID tests
-python -m pytest tests/test_category1_complete.py tests/test_person_reid.py -v
+│       ├── config.py              # Settings loader
+│       └── assign.py              # Face-to-track assignment
+├── web/
+│   ├── app.py                     # Flask app (12 pages, 16+ APIs)
+│   └── templates/                 # Jinja2 HTML templates
+├── data/
+│   ├── snapshots/                 # Event face captures
+│   ├── db/                        # SQLite databases
+│   └── faces_gallery/             # Enrolled face images
+└── models/
+    ├── yolo/                      # YOLOv11n ONNX
+    └── face/                      # InsightFace buffalo_s
 ```
 
 ## Troubleshooting
 
 | Issue | Fix |
 |-------|-----|
-| `redis-cli: command not found` | `sudo apt install redis-server && sudo systemctl start redis` |
-| `redis-cli XLEN attendace:events` returns 0 | Typo! Use `attendance:events` (with 'n') |
-| No events in Redis | Check `redis-cli ping` returns PONG, then check `watch -n 2 "redis-cli XLEN attendance:events"` |
-| EXIT not firing | Ensure person walks through all 3 zones (OUTSIDE → DOOR → INSIDE) |
-| `sqlite3.OperationalError: disk I/O error` | Delete WAL files: `rm -f data/db/*.db-wal data/db/*.db-shm` |
-| No person detected | Camera frame must show a person walking through the door zone |
-| Slow performance | Use sub stream (`cam_01_sub`), reduce `yolo_imgsz` to 320 |
-| `Connection refused 127.0.0.1:8554` | go2rtc not running: `./scripts/start_go2rtc.sh` |
+| Pipeline won't start | Check camera URL in settings.yaml, verify `ping 192.168.2.112` |
+| No events firing | Adjust `crossing_line.line.y1` to match where people walk in your camera view |
+| Entry/exit swapped | Change `entry_direction` to opposite (upward↔downward) |
+| No snapshots | Check `data/snapshots/` folder exists and is writable |
+| GPU not detected | Run `python -c "import onnxruntime; print(onnxruntime.get_available_providers())"` |
+| Redis warning | Redis not required — falls back to JSONL automatically |
+| Attendance page empty | Ensure pipeline has run and events exist in `/events` page |
 
 ## Camera Setup
 
@@ -373,10 +209,9 @@ python -m pytest tests/test_category1_complete.py tests/test_person_reid.py -v
 |---------|-------|
 | Camera | Dahua IPC |
 | IP | 192.168.2.112 |
-| Connection | Direct Ethernet (USB adapter) |
-| Stream | Sub stream via go2rtc (`127.0.0.1:8554/cam_01_sub`) |
-| Resolution | 704x576 (sub stream) |
-| FPS | 15 |
+| Connection | Direct Ethernet |
+| Stream | Sub stream (`subtype=1`) |
+| Resolution | 1280x720 |
 
 ## License
 
