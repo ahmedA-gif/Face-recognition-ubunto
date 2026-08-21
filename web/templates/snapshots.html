@@ -5,7 +5,7 @@
 <div class="mb-6 flex justify-between items-end">
     <div>
         <h2 class="font-headline-lg text-headline-lg font-semibold text-on-surface tracking-tight">Attendance Snapshots</h2>
-        <p class="font-body-md text-body-md text-on-surface-variant mt-1">Face captures at entry/exit events with person identification</p>
+        <p class="font-body-md text-body-md text-on-surface-variant mt-1">Face captures at entry/exit events — click name to identify unknowns</p>
     </div>
     <div class="flex gap-2">
         <button onclick="filterSnapshots('all')" id="btn-all" class="font-label-caps text-label-caps bg-primary-container text-on-primary px-3 py-1.5 rounded cursor-pointer transition-all">ALL</button>
@@ -31,10 +31,12 @@
 
 <div id="snapshots-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
     {% for event in events|sort(attribute='id', reverse=True) %}
+    {% set is_unknown = (not event.person) or event.person == 'Unknown' or event.person.startswith('Guest#') or event.person.startswith('ID:') %}
     <div class="snap-card bg-surface-container-high border border-outline-variant rounded-lg overflow-hidden card-hover transition-all"
          data-direction="{{ event.direction }}"
          data-person="{{ event.person|default('Unknown', true)|lower }}"
-         data-name="{{ event.person|default('', true)|lower }}">
+         data-name="{{ event.person|default('', true)|lower }}"
+         data-event-id="{{ event.id }}">
         <div class="relative aspect-square bg-surface-container-highest">
             {% if event.snapshot_path %}
             <img src="/api/snapshot/{{ event.snapshot_path.replace('\\', '/')|split('/')|last }}" 
@@ -60,24 +62,30 @@
                 {% endif %}
             </div>
 
-            {% if not event.person or event.person == 'Unknown' or event.person.startswith('Guest#') or event.person.startswith('ID:') %}
+            {% if is_unknown %}
             <div class="absolute top-2 right-2">
-                <span class="bg-amber-600/90 text-white font-label-caps text-label-caps px-2 py-0.5 rounded flex items-center gap-1">
-                    <span class="material-symbols-outlined text-[12px]">person_off</span> UNKNOWN
-                </span>
+                <button onclick="openNameModal({{ event.id }}, '{{ event.person|default('Unknown', true) }}')" class="bg-amber-600/90 text-white font-label-caps text-label-caps px-2 py-0.5 rounded flex items-center gap-1 hover:bg-amber-500 transition-colors cursor-pointer">
+                    <span class="material-symbols-outlined text-[12px]">edit</span> NAME IT
+                </button>
             </div>
             {% endif %}
         </div>
         <div class="p-3">
+            {% if is_unknown %}
+            <button onclick="openNameModal({{ event.id }}, '{{ event.person|default('Unknown', true) }}')" class="font-body-md text-body-md font-semibold text-amber hover:text-amber-400 transition-colors cursor-pointer text-left truncate w-full">
+                {{ event.person or 'Unknown' }} <span class="text-xs text-on-surface-variant">tap to name</span>
+            </button>
+            {% else %}
             <div class="font-body-md text-body-md font-semibold text-on-surface truncate">
-                {{ event.person if event.person and event.person != 'Unknown' else 'Unknown' }}
+                {{ event.person }}
             </div>
+            {% endif %}
             <div class="font-data-mono text-data-mono text-on-surface-variant text-xs mt-1 flex items-center gap-1">
                 <span class="material-symbols-outlined text-[12px]">schedule</span>
                 {{ event.date }} {{ event.time }}
             </div>
             <div class="font-data-mono text-data-mono text-on-surface-variant/60 text-xs mt-1">
-                conf: {{ '%.2f'|format(event.confidence) }} | track:{{ event.track_id }}
+                conf: {{ '%.2f'|format(event.confidence) }}
             </div>
         </div>
     </div>
@@ -85,12 +93,69 @@
 </div>
 {% endif %}
 
+<!-- Name Modal -->
+<div id="name-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+    <div class="bg-surface-container-high border border-outline-variant rounded-xl p-6 w-96 shadow-2xl">
+        <h3 class="font-headline-md text-headline-md font-bold text-on-surface mb-1">Identify Person</h3>
+        <p class="font-body-sm text-body-sm text-on-surface-variant mb-4">Enter the name for <span id="modal-old-name" class="text-amber font-medium"></span></p>
+        <input type="text" id="modal-name-input" placeholder="e.g. Ahmed, John..."
+               class="w-full bg-surface-container border border-outline-variant/50 rounded px-3 py-2 font-body-md text-body-md text-on-surface focus:outline-none focus:border-primary mb-4"
+               onkeydown="if(event.key==='Enter')submitName()">
+        <div class="flex justify-end gap-2">
+            <button onclick="closeNameModal()" class="px-4 py-1.5 bg-surface-container text-on-surface-variant border border-outline-variant/50 rounded font-body-sm hover:bg-surface-container-highest transition-colors">Cancel</button>
+            <button onclick="submitName()" id="modal-submit-btn" class="px-4 py-1.5 bg-primary-container text-on-primary rounded font-body-sm font-semibold hover:opacity-90 transition-opacity">Save & Learn Face</button>
+        </div>
+        <p id="modal-status" class="font-body-sm text-body-sm text-on-surface-variant mt-3 hidden"></p>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
     let currentFilter = 'all';
-    
+    let currentEventId = null;
+
+    function openNameModal(eventId, currentName) {
+        currentEventId = eventId;
+        document.getElementById('modal-old-name').textContent = currentName;
+        document.getElementById('modal-name-input').value = '';
+        document.getElementById('modal-status').classList.add('hidden');
+        document.getElementById('modal-submit-btn').disabled = false;
+        document.getElementById('name-modal').classList.remove('hidden');
+        setTimeout(() => document.getElementById('modal-name-input').focus(), 100);
+    }
+
+    function closeNameModal() {
+        document.getElementById('name-modal').classList.add('hidden');
+        currentEventId = null;
+    }
+
+    async function submitName() {
+        const name = document.getElementById('modal-name-input').value.trim();
+        if (!name || !currentEventId) return;
+
+        const btn = document.getElementById('modal-submit-btn');
+        const status = document.getElementById('modal-status');
+        btn.disabled = true;
+        btn.textContent = 'Saving...';
+        status.classList.add('hidden');
+
+        const r = await apiCall(`/api/events/${currentEventId}/name`, 'POST', { name: name });
+
+        if (r.ok) {
+            status.textContent = r.face_added ? 'Name saved & face learned!' : 'Name saved (no face in snapshot)';
+            status.className = 'font-body-sm text-body-sm text-secondary mt-3';
+            status.classList.remove('hidden');
+            setTimeout(() => { closeNameModal(); location.reload(); }, 1200);
+        } else {
+            status.textContent = r.error || 'Failed';
+            status.className = 'font-body-sm text-body-sm text-error mt-3';
+            status.classList.remove('hidden');
+            btn.disabled = false;
+            btn.textContent = 'Save & Learn Face';
+        }
+    }
+
     function filterSnapshots(filter) {
         currentFilter = filter;
         document.querySelectorAll('[id^="btn-"]').forEach(btn => {
@@ -100,7 +165,6 @@
         if (activeBtn) {
             activeBtn.className = 'font-label-caps text-label-caps bg-primary-container text-on-primary px-3 py-1.5 rounded cursor-pointer transition-all';
         }
-        
         document.querySelectorAll('.snap-card').forEach(card => {
             const dir = card.dataset.direction;
             const person = card.dataset.person;
@@ -112,7 +176,7 @@
             card.style.display = show ? '' : 'none';
         });
     }
-    
+
     function searchSnapshots(query) {
         const q = query.toLowerCase();
         document.querySelectorAll('.snap-card').forEach(card => {
@@ -120,5 +184,9 @@
             card.style.display = name.includes(q) ? '' : 'none';
         });
     }
+
+    document.getElementById('name-modal').addEventListener('click', function(e) {
+        if (e.target === this) closeNameModal();
+    });
 </script>
 {% endblock %}

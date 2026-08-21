@@ -216,7 +216,7 @@ def dashboard():
     except Exception:
         events_today = []
     try:
-        attendance_today = att.list_by_date(today) if hasattr(att, 'list_by_date') else []
+        attendance_today = att.daily_logs(today)
     except Exception:
         attendance_today = []
 
@@ -259,7 +259,7 @@ def attendance():
     att = _get_attendance_db()
     today = datetime.now().strftime("%Y-%m-%d")
     try:
-        records = att.list_by_date(today) if hasattr(att, 'list_by_date') else []
+        records = att.daily_logs(today)
     except Exception:
         records = []
     return render_template("attendance.html", records=records, today=today)
@@ -560,6 +560,66 @@ def api_people_update(name: str):
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/events/<int:event_id>/name", methods=["POST"])
+def api_event_name_person(event_id: int):
+    """Name an unknown person: extract face from snapshot, add to gallery, update event+attendance."""
+    new_name = request.json.get("name", "").strip() if request.is_json else ""
+    if not new_name:
+        return jsonify({"ok": False, "error": "Name required"}), 400
+
+    store = _get_events_store()
+    event = store.get(event_id)
+    if not event:
+        return jsonify({"ok": False, "error": "Event not found"}), 404
+
+    old_name = event.get("person", "")
+
+    store.update_person(event_id, new_name)
+
+    snap_path = event.get("snapshot_path", "")
+    face_added = False
+    if snap_path and Path(snap_path).exists():
+        try:
+            import cv2
+            import numpy as np
+            from src.recognition.face_engine import FaceEngine
+            cfg = _get_config()
+            fe = FaceEngine(
+                root=cfg["models"]["face_root"],
+                pack=cfg["models"]["face_pack"],
+                det_size=tuple(cfg["models"]["face_det_size"]),
+                providers=["CUDAExecutionProvider", "CPUExecutionProvider"] if _gpu_mode else None,
+            )
+            img = cv2.imread(snap_path)
+            if img is not None:
+                hits = fe.detect_and_embed(img, min_face_px=20)
+                if hits:
+                    hit = max(hits, key=lambda h: (h.xyxy[2] - h.xyxy[0]) * (h.xyxy[3] - h.xyxy[1]))
+                    gallery = _get_gallery()
+                    gallery.add(new_name, hit.embedding)
+                    gallery.flush()
+                    face_added = True
+        except Exception as e:
+            print(f"[NameUnknown] face extraction error: {e}")
+
+    try:
+        att = _get_attendance_db()
+        att._conn.execute(
+            "UPDATE attendance_logs SET person_id = ?, person_name = ? WHERE person_id = ?",
+            (new_name, new_name, old_name),
+        )
+        att._conn.commit()
+    except Exception:
+        pass
+
+    all_events = store.recent(limit=1000)
+    for ev in all_events:
+        if ev.get("person") == old_name and ev.get("id") != event_id:
+            store.update_person(ev["id"], new_name)
+
+    return jsonify({"ok": True, "message": f"Named as {new_name}", "face_added": face_added})
+
+
 @app.route("/api/cameras", methods=["GET"])
 def api_cameras_list():
     cfg = _get_config()
@@ -609,7 +669,7 @@ def api_attendance_list():
     att = _get_attendance_db()
     date = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
     try:
-        records = att.list_by_date(date) if hasattr(att, 'list_by_date') else []
+        records = att.daily_logs(date)
     except Exception:
         records = []
     return jsonify(records)
