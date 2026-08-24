@@ -18,7 +18,7 @@ import time
 import json
 import uuid
 import shutil
-import sqlite3
+from src.db.postgres import execute_query, execute_write, run_migrations
 import threading
 import traceback
 from datetime import datetime, timedelta
@@ -327,31 +327,15 @@ def analytics():
 
 @app.route("/database")
 def database():
-    cfg = _get_config()
-    dbs = {
-        "events": cfg["events"]["db_path"],
-        "faces": cfg["events"]["faces_db_path"],
-        "attendance": cfg["attendance"]["db_path"],
-    }
+    tables = ["events", "faces", "attendance_logs", "boundary_calibration_history"]
     db_info = {}
-    for name, path in dbs.items():
-        p = Path(path)
-        if p.exists():
-            size_mb = p.stat().st_size / (1024 * 1024)
-            conn = sqlite3.connect(str(p))
-            tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-            table_counts = {}
-            for t in tables:
-                try:
-                    count = conn.execute(f"SELECT COUNT(*) FROM [{t}]").fetchone()[0]
-                    table_counts[t] = count
-                except Exception:
-                    table_counts[t] = 0
-            conn.close()
-            db_info[name] = {"path": str(p), "size_mb": round(size_mb, 2), "tables": table_counts}
-        else:
-            db_info[name] = {"path": str(p), "size_mb": 0, "tables": {}}
-    return render_template("database.html", databases=db_info)
+    for t in tables:
+        try:
+            rows = execute_query(f"SELECT COUNT(*) AS n FROM {t}")
+            db_info[t] = rows[0]["n"] if rows else 0
+        except Exception:
+            db_info[t] = 0
+    return render_template("database.html", databases={"neon": {"tables": db_info}})
 
 
 @app.route("/system")
@@ -537,8 +521,7 @@ def api_people_add():
 def api_people_delete(name: str):
     gallery = _get_gallery()
     try:
-        gallery._conn.execute("DELETE FROM faces WHERE name = ?", (name,))
-        gallery._conn.commit()
+        execute_write("DELETE FROM faces WHERE name = %s", (name,))
         gallery.reload()
         return jsonify({"ok": True, "message": f"Deleted {name}"})
     except Exception as e:
@@ -552,8 +535,7 @@ def api_people_update(name: str):
         return jsonify({"ok": False, "error": "New name required"}), 400
     gallery = _get_gallery()
     try:
-        gallery._conn.execute("UPDATE faces SET name = ? WHERE name = ?", (new_name, name))
-        gallery._conn.commit()
+        execute_write("UPDATE faces SET name = %s WHERE name = %s", (new_name, name))
         gallery.reload()
         return jsonify({"ok": True, "message": f"Renamed {name} to {new_name}"})
     except Exception as e:
@@ -603,12 +585,10 @@ def api_event_name_person(event_id: int):
             print(f"[NameUnknown] face extraction error: {e}")
 
     try:
-        att = _get_attendance_db()
-        att._conn.execute(
-            "UPDATE attendance_logs SET person_id = ?, person_name = ? WHERE person_id = ?",
+        execute_write(
+            "UPDATE attendance_logs SET person_id = %s, person_name = %s WHERE person_id = %s",
             (new_name, new_name, old_name),
         )
-        att._conn.commit()
     except Exception:
         pass
 
@@ -677,39 +657,32 @@ def api_attendance_list():
 
 @app.route("/api/database/backup", methods=["POST"])
 def api_database_backup():
-    cfg = _get_config()
     backup_dir = ROOT / "data" / "backups" / datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_dir.mkdir(parents=True, exist_ok=True)
-    for key in ("db_path", "faces_db_path"):
-        src = Path(cfg["events"][key])
-        if src.exists():
-            shutil.copy2(str(src), str(backup_dir / src.name))
-    att_src = Path(cfg["attendance"]["db_path"])
-    if att_src.exists():
-        shutil.copy2(str(att_src), str(backup_dir / att_src.name))
+    tables = ["events", "faces", "attendance_logs", "boundary_calibration_history"]
+    import json as _json
+    for table in tables:
+        try:
+            rows = execute_query(f"SELECT * FROM {table}")
+            for row in rows:
+                for k, v in row.items():
+                    if isinstance(v, (bytes, memoryview)):
+                        row[k] = "<binary>"
+            with open(backup_dir / f"{table}.json", "w") as f:
+                _json.dump(rows, f, indent=2, default=str)
+        except Exception:
+            pass
     return jsonify({"ok": True, "path": str(backup_dir)})
 
 
 @app.route("/api/database/clear", methods=["POST"])
 def api_database_clear():
     db_name = request.json.get("database", "") if request.is_json else ""
-    cfg = _get_config()
-    db_map = {
-        "events": cfg["events"]["db_path"],
-        "faces": cfg["events"]["faces_db_path"],
-        "attendance": cfg["attendance"]["db_path"],
-    }
-    if db_name not in db_map:
-        return jsonify({"ok": False, "error": "Invalid database name"}), 400
-    path = Path(db_map[db_name])
-    if path.exists():
-        conn = sqlite3.connect(str(path))
-        tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-        for t in tables:
-            conn.execute(f"DELETE FROM [{t}]")
-        conn.commit()
-        conn.close()
-    return jsonify({"ok": True, "message": f"Cleared {db_name} database"})
+    valid_tables = {"events", "faces", "attendance_logs", "boundary_calibration_history"}
+    if db_name not in valid_tables:
+        return jsonify({"ok": False, "error": "Invalid table name"}), 400
+    execute_write(f"DELETE FROM {db_name}")
+    return jsonify({"ok": True, "message": f"Cleared {db_name} table"})
 
 
 @app.route("/api/snapshots/<path:filename>")

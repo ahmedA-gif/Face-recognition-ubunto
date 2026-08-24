@@ -25,14 +25,8 @@ lapx==0.9.4
 # Real-time event stream (attendance:events) — replaces CSV on the hot path
 redis==5.2.1
 
-# Optional (notebooks / preview API):
-# jupyter
-# ipywidgets
-# tqdm
-# requests
-# fastapi
-# uvicorn
-# psycopg2-binary   # attendance worker -> PostgreSQL (Phase 6)
+# PostgreSQL (Neon) database adapter
+psycopg2-binary==2.9.12
 
 # ---------------------------------------------------------------------------
 # GPU-SPECIFIC DEPENDENCIES (Optional - install as needed)

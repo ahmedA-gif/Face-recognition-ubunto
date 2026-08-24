@@ -120,7 +120,7 @@ reasoning:
 
 attendance:
   enabled: true
-  db_path: D:\Face-recognition-ubunto\data\db\attendance.db
+  db_path: ""
   shift_start: 09:00
   shift_end: '17:00'
   late_threshold_mins: 15
@@ -128,8 +128,8 @@ attendance:
   debounce_minutes: 2.0
 
 events:
-  db_path: D:\Face-recognition-ubunto\data\db\events.db
-  faces_db_path: D:\Face-recognition-ubunto\data\db\faces.db
+  db_path: ""
+  faces_db_path: ""
   snapshots_dir: D:\Face-recognition-ubunto\data\snapshots
   save_snapshots: true
 
