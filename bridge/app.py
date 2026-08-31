@@ -111,16 +111,17 @@ def extract_foot_point(box):
 
 
 def _dedup_path_data(path_data):
-    """Deduplicate path_data points. Remove consecutive identical points."""
+    """Deduplicate path_data points. Preserve timestamps."""
     if not path_data:
         return []
     unique = []
     for point in path_data:
-        if isinstance(point, list) and len(point) >= 1:
+        if isinstance(point, list) and len(point) >= 2:
             coords = point[0]
+            ts = point[1]
             if isinstance(coords, list) and len(coords) == 2:
-                pt = (round(coords[0], 4), round(coords[1], 4))
-                if not unique or unique[-1] != pt:
+                pt = (round(coords[0], 4), round(coords[1], 4), ts)
+                if not unique or unique[-1][0:2] != pt[0:2]:
                     unique.append(pt)
     return unique
 
@@ -138,7 +139,7 @@ class TrackState:
         self.camera = camera
         self.path = []  # List of (x, y, timestamp)
         self.frigate_zones = []  # Frigate zone strings per point
-        self.first_seen = time.time()
+        self.first_seen = None  # Set from first point's actual timestamp
         self.last_update = time.time()
         self.event_emitted = False
         self.event_time = None
@@ -162,6 +163,10 @@ class TrackState:
         self.frigate_zones.append(frigate_zones or [])
         self.last_update = ts
 
+        # Set first_seen from first point's actual timestamp
+        if self.first_seen is None:
+            self.first_seen = ts
+
         # Keep only recent points (last 60 seconds)
         cutoff = ts - 60
         self.path = [(x, y, t) for x, y, t in self.path if t > cutoff]
@@ -177,6 +182,11 @@ class TrackState:
 
     def get_duration(self):
         """Get track duration in seconds."""
+        if self.first_seen is None:
+            return 0.0
+        if self.path:
+            # Use actual path time span
+            return self.path[-1][2] - self.path[0][2]
         return time.time() - self.first_seen
 
     def get_displacement(self):
@@ -204,27 +214,7 @@ class TrackState:
         return total_dy / (len(self.path) - 1)
 
     def has_turn_back(self):
-        """Detect if trajectory reversed direction significantly.
-
-        Only triggers if person clearly reverses direction (not small
-        movements at the door area).
-        """
-        if len(self.path) < 4:
-            return False
-
-        direction_changes = 0
-        max_reversal = 0
-        for i in range(2, len(self.path)):
-            dy1 = self.path[i - 1][1] - self.path[i - 2][1]
-            dy2 = self.path[i][1] - self.path[i - 1][1]
-            if dy1 * dy2 < 0:
-                direction_changes += 1
-                reversal = abs(dy2)
-                max_reversal = max(max_reversal, reversal)
-
-        # Only trigger if more than 50% of steps reversed AND large reversal
-        if direction_changes > len(self.path) * 0.5 and max_reversal > TURN_BACK_THRESHOLD:
-            return True
+        """Turn-back detection disabled — camera identity approach already handles this."""
         return False
 
     def get_quality_score(self):
@@ -278,22 +268,29 @@ class TrackState:
         Event type is determined by the caller based on camera identity.
         """
         if self.event_emitted:
+            print(f"[Debug] event_emitted=True for {self.track_id}")
             return None
 
         # Minimum points accumulated
         if len(self.path) < MIN_TRACK_POINTS:
+            print(f"[Debug] path={len(self.path)} < {MIN_TRACK_POINTS} for {self.track_id}")
             return None
 
         # Minimum tracking duration
-        if self.get_duration() < MIN_TRACK_DURATION_SEC:
+        dur = self.get_duration()
+        if dur < MIN_TRACK_DURATION_SEC:
+            print(f"[Debug] duration={dur:.1f}s < {MIN_TRACK_DURATION_SEC}s for {self.track_id}")
             return None
 
         # Person must have moved
-        if self.get_total_distance() < MIN_TRACK_DISTANCE:
+        dist = self.get_total_distance()
+        if dist < MIN_TRACK_DISTANCE:
+            print(f"[Debug] distance={dist:.3f} < {MIN_TRACK_DISTANCE} for {self.track_id}")
             return None
 
         # Check for turn-back (person reversed direction)
         if self.has_turn_back():
+            print(f"[Debug] turn_back=True for {self.track_id}")
             return None
 
         # Calculate confidence
@@ -525,6 +522,7 @@ def _process_person_event(event):
             print(f"[Poller] Error fetching sub_label: {e}")
 
     # Fallback: check face train files for recognized faces (match by time proximity)
+    frigate_says_unknown = False
     if not sub_label:
         try:
             r3 = requests.get(f"{FRIGATE_API}/api/faces", timeout=5)
@@ -533,7 +531,6 @@ def _process_person_event(event):
                 train_files = faces_data.get("train", [])
                 best_match = None
                 best_score = 0
-                frigate_says_unknown = False
                 for fname in train_files:
                     if not fname.endswith(".webp"):
                         continue
@@ -581,35 +578,40 @@ def _process_person_event(event):
             return
         _event_cooldowns[camera] = now
 
-    # Extract foot point from box only (path_data uses pixel coords, not normalized)
-    foot_point = extract_foot_point(box)
-    if foot_point is None:
+    # Extract foot points from path_data (normalized coords from Frigate)
+    # path_data format: [[[x, y], timestamp], ...]
+    path_points = _dedup_path_data(path_data)
+
+    # Also get the box foot point as a fallback
+    box_point = extract_foot_point(box)
+
+    # Combine: path_data points first, then box point if not duplicate
+    # path_points are (x, y, ts) tuples, box_point is (x, y)
+    all_points = list(path_points)
+    if box_point:
+        bp = (box_point[0], box_point[1], time.time())
+        if not all_points or all_points[-1][0:2] != bp[0:2]:
+            all_points.append(bp)
+
+    if not all_points:
         return
 
-    # Build trajectory from multiple events (not path_data within single event)
-    # Each event gives one foot-point; trajectory is built across events
-    trajectory = [foot_point]
+    print(f"[Bridge] Event {event_id}: {len(all_points)} points, zones={zones}")
 
-    # Debug: log the foot point
-    print(f"[Bridge] Event {event_id}: foot_y={foot_point[1]:.3f}, box={box}, zones={zones}")
-
-    # Get or create track state per CAMERA (not per event_id)
-    # This allows accumulating points across multiple events
+    # Get or create track state per CAMERA
     track_key = f"{camera}_main"
     with _tracks_lock:
         if track_key not in _active_tracks:
             _active_tracks[track_key] = TrackState(track_key, camera)
         track = _active_tracks[track_key]
 
-    # Check if this point is too close to the last point (skip if duplicate position)
-    if track.path:
-        last_x, last_y, _ = track.path[-1]
-        if abs(foot_point[0] - last_x) < 0.01 and abs(foot_point[1] - last_y) < 0.01:
-            print(f"[Bridge] Skipping duplicate position: {foot_point}")
-            return
-
-    # Add point to track with Frigate zone data
-    track.add_point(foot_point, frigate_zones=zones)
+    # Add all points to track (with Frigate timestamps for accurate duration)
+    for fp in all_points:
+        if track.path:
+            last_x, last_y, _ = track.path[-1]
+            if abs(fp[0] - last_x) < 0.01 and abs(fp[1] - last_y) < 0.01:
+                continue
+        track.add_point(fp, frigate_zones=zones, timestamp=fp[2] if len(fp) > 2 else None)
 
     # Check if we should emit an event
     event_result = track.should_emit_event(camera)

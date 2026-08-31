@@ -75,18 +75,18 @@ cameras:
       height: 480
       fps: 3
     motion:
-      threshold: 30
-      contour_area: 50
+      threshold: 20
+      contour_area: 30
       improve_contrast: true
     objects:
       track:
         - person
       filters:
         person:
-          min_score: 0.40
-          min_area: 3000
+          min_score: 0.30
+          min_area: 2000
           max_area: 100000
-          threshold: 0.55
+          threshold: 0.45
     zones:
       outside_door:
         coordinates: 0,320,640,320,640,480,0,480
@@ -133,18 +133,18 @@ cameras:
       height: 480
       fps: 3
     motion:
-      threshold: 30
-      contour_area: 50
+      threshold: 20
+      contour_area: 30
       improve_contrast: true
     objects:
       track:
         - person
       filters:
         person:
-          min_score: 0.40
-          min_area: 3000
+          min_score: 0.30
+          min_area: 2000
           max_area: 100000
-          threshold: 0.55
+          threshold: 0.45
     zones:
       inside_exit:
         coordinates: 0,0,640,0,640,240,0,240
