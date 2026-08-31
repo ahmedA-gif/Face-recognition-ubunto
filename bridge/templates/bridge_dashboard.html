@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bridge Dashboard - VisionAttend AI</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0a0a; color: #e0e0e0; }
+        .header { background: #1a1a2e; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; }
+        .header h1 { font-size: 20px; color: #00d4ff; }
+        .status-group { display: flex; gap: 12px; }
+        .status { padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+        .status.ok { background: #1a4d2e; color: #4ade80; }
+        .status.err { background: #4d1a1a; color: #f87171; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+        .stat-card { background: #1a1a2e; border-radius: 12px; padding: 20px; border: 1px solid #333; }
+        .stat-card h3 { font-size: 12px; color: #888; text-transform: uppercase; margin-bottom: 8px; }
+        .stat-card .value { font-size: 36px; font-weight: 700; color: #00d4ff; }
+        .stat-card .sub { font-size: 12px; color: #666; margin-top: 4px; }
+        .section { background: #1a1a2e; border-radius: 12px; border: 1px solid #333; margin-bottom: 20px; }
+        .section-header { padding: 16px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; }
+        .section-header h2 { font-size: 16px; color: #94a3b8; }
+        .section-body { padding: 16px; }
+        .cameras { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+        .camera-card { background: #1a1a2e; border-radius: 12px; overflow: hidden; border: 1px solid #333; }
+        .camera-card h3 { padding: 12px 16px; font-size: 14px; color: #94a3b8; border-bottom: 1px solid #333; display: flex; justify-content: space-between; }
+        .camera-card img { width: 100%; display: block; background: #000; min-height: 300px; }
+        .event-list { max-height: 400px; overflow-y: auto; }
+        .event-item { padding: 12px 16px; border-bottom: 1px solid #222; display: flex; justify-content: space-between; align-items: center; }
+        .event-item:hover { background: #222; }
+        .dir-entry { color: #4ade80; font-weight: 600; }
+        .dir-exit { color: #f87171; font-weight: 600; }
+        .conf-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
+        .conf-dual { background: #1a4d2e; color: #4ade80; }
+        .conf-single { background: #3d3d00; color: #fbbf24; }
+        .conf-conflict { background: #4d3d00; color: #fb923c; }
+        .conf-none { background: #4d1a1a; color: #f87171; }
+        .sim-bar { display: inline-block; width: 60px; height: 6px; background: #333; border-radius: 3px; overflow: hidden; vertical-align: middle; margin-left: 6px; }
+        .sim-fill { height: 100%; border-radius: 3px; }
+        .timeline-table { width: 100%; border-collapse: collapse; }
+        .timeline-table th { text-align: left; padding: 10px 12px; font-size: 12px; color: #888; border-bottom: 1px solid #333; text-transform: uppercase; }
+        .timeline-table td { padding: 10px 12px; border-bottom: 1px solid #222; font-size: 13px; }
+        .timeline-table tr:hover { background: #222; }
+        .timeline-entry { color: #4ade80; }
+        .timeline-exit { color: #f87171; }
+        .nav { padding: 12px 24px; background: #111; border-bottom: 1px solid #333; display: flex; gap: 20px; }
+        .nav a { color: #00d4ff; text-decoration: none; font-size: 14px; }
+        .nav a:hover { text-decoration: underline; }
+        .nav a.active { border-bottom: 2px solid #00d4ff; }
+        @media (max-width: 900px) { .grid-4 { grid-template-columns: 1fr 1fr; } .cameras { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>VisionAttend AI - Bridge Dashboard</h1>
+        <div class="status-group">
+            <span class="status {{ 'ok' if frigate_status.connected else 'err' }}">
+                MQTT {{ 'ON' if frigate_status.connected else 'OFF' }}
+            </span>
+            <span class="status ok">Entry: 192.168.2.112</span>
+            <span class="status ok">Exit: 192.168.1.111</span>
+        </div>
+    </div>
+    <div class="nav">
+        <a href="/">Dashboard</a>
+        <a href="/bridge" class="active">Bridge</a>
+        <a href="/frigate">Frigate NVR</a>
+        <a href="/attendance">Attendance</a>
+        <a href="/events">Events</a>
+        <a href="/people">People</a>
+    </div>
+    <div class="container">
+        <!-- Stats -->
+        <div class="grid-4">
+            <div class="stat-card">
+                <h3>Total Detected</h3>
+                <div class="value" id="totalDetected">0</div>
+                <div class="sub">persons detected</div>
+            </div>
+            <div class="stat-card">
+                <h3>Currently Inside</h3>
+                <div class="value" id="totalInside">0</div>
+                <div class="sub">inside right now</div>
+            </div>
+            <div class="stat-card">
+                <h3>Total Entries</h3>
+                <div class="value" id="totalEntries">0</div>
+                <div class="sub">entry events</div>
+            </div>
+            <div class="stat-card">
+                <h3>Total Exits</h3>
+                <div class="value" id="totalExits">0</div>
+                <div class="sub">exit events</div>
+            </div>
+        </div>
+
+        <!-- Camera Feeds -->
+        <div class="cameras">
+            <div class="camera-card">
+                <h3>
+                    <span>Entry Camera (192.168.2.112)</span>
+                    <span style="color:#4ade80;font-size:12px">LIVE</span>
+                </h3>
+                <img src="/video_feed/cam_entry" alt="Entry Camera" onerror="this.style.background='#1a1a2e';this.alt='Camera offline'">
+            </div>
+            <div class="camera-card">
+                <h3>
+                    <span>Exit Camera (192.168.1.111)</span>
+                    <span style="color:#4ade80;font-size:12px">LIVE</span>
+                </h3>
+                <img src="/video_feed/cam_exit" alt="Exit Camera" onerror="this.style.background='#1a1a2e';this.alt='Camera offline'">
+            </div>
+        </div>
+
+        <!-- Person Timeline -->
+        <div class="section">
+            <div class="section-header">
+                <h2>Person Timeline (Entry/Exit Times)</h2>
+                <span style="font-size:12px;color:#666" id="todayDate"></span>
+            </div>
+            <div class="section-body" style="padding:0;overflow-x:auto">
+                <table class="timeline-table">
+                    <thead>
+                        <tr>
+                            <th>Person</th>
+                            <th>First Entry</th>
+                            <th>Last Exit</th>
+                            <th>Entries</th>
+                            <th>Exits</th>
+                            <th>Avg Confidence</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="timelineBody">
+                        <tr><td colspan="7" style="color:#666;text-align:center;padding:20px">Waiting for events...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Recent Events -->
+        <div class="section">
+            <div class="section-header">
+                <h2>Recent Entry/Exit Events</h2>
+                <span style="font-size:12px;color:#666" id="eventCount">0 events</span>
+            </div>
+            <div class="event-list" id="eventList">
+                <p style="padding:20px;color:#666">Waiting for events...</p>
+            </div>
+        </div>
+
+        <!-- Active Tracks (Debug) -->
+        <div class="section">
+            <div class="section-header">
+                <h2>Active Tracks (Debug)</h2>
+                <span style="font-size:12px;color:#666" id="trackCount">0 tracks</span>
+            </div>
+            <div class="section-body" style="padding:0;overflow-x:auto">
+                <table class="timeline-table">
+                    <thead>
+                        <tr>
+                            <th>Snapshot</th>
+                            <th>Track ID</th>
+                            <th>Camera</th>
+                            <th>State</th>
+                            <th>Frames</th>
+                            <th>Trajectory</th>
+                            <th>First Seen</th>
+                            <th>Last Seen</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trackBody">
+                        <tr><td colspan="8" style="color:#666;text-align:center;padding:20px">No active tracks</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function simColor(s) { return s >= 0.8 ? '#4ade80' : s >= 0.6 ? '#fbbf24' : '#f87171'; }
+        function simPct(s) { return Math.round(s * 100) + '%'; }
+
+        document.getElementById('todayDate').textContent = new Date().toLocaleDateString();
+
+        async function refreshAll() {
+            try {
+                const [statsRes, eventsRes, summaryRes, tracksRes] = await Promise.all([
+                    fetch('/api/stats'),
+                    fetch('/api/events'),
+                    fetch('/api/person_summary'),
+                    fetch('/api/tracks'),
+                ]);
+
+                const stats = await statsRes.json();
+                document.getElementById('totalDetected').textContent = stats.total_detected || 0;
+                document.getElementById('totalInside').textContent = stats.total_inside || 0;
+                document.getElementById('totalEntries').textContent = stats.total_entries || 0;
+                document.getElementById('totalExits').textContent = stats.total_exits || 0;
+
+                // Timeline
+                const summary = await summaryRes.json();
+                const tbody = document.getElementById('timelineBody');
+                if (Array.isArray(summary) && summary.length > 0) {
+                    tbody.innerHTML = summary.map(p => {
+                        const conf = p.avg_confidence || 0;
+                        return `<tr>
+                            <td><strong>${p.person_name}</strong></td>
+                            <td class="timeline-entry">${p.first_entry || '-'}</td>
+                            <td class="timeline-exit">${p.last_exit || '-'}</td>
+                            <td>${p.entry_count || 0}</td>
+                            <td>${p.exit_count || 0}</td>
+                            <td>
+                                ${simPct(conf)}
+                                <span class="sim-bar"><span class="sim-fill" style="width:${simPct(conf)};background:${simColor(conf)}"></span></span>
+                            </td>
+                            <td style="color:${p.status === 'Inside' ? '#fbbf24' : p.status === 'Checked Out' ? '#4ade80' : '#888'};font-weight:600">${p.status || 'Unknown'}</td>
+                        </tr>`;
+                    }).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="7" style="color:#666;text-align:center;padding:20px">No person data yet. Walk through the door.</td></tr>';
+                }
+
+                // Events
+                const events = await eventsRes.json();
+                const list = document.getElementById('eventList');
+                document.getElementById('eventCount').textContent = events.length + ' events';
+                if (events.length === 0) {
+                    list.innerHTML = '<p style="padding:20px;color:#666">No events yet.</p>';
+                } else {
+                    list.innerHTML = events.slice(0, 50).map(e => {
+                        const dirClass = e.direction === 'ENTRY' ? 'dir-entry' : 'dir-exit';
+                        const confClass = 'conf-' + (e.confidence || 'none');
+                        const snapshotUrl = e.snapshot_url || `/api/events/${e.track_id}/snapshot.jpg`;
+                        return `<div class="event-item" style="display:flex;gap:12px;align-items:center">
+                            <img src="${snapshotUrl}" style="width:60px;height:45px;object-fit:cover;border-radius:4px;background:#222" onerror="this.style.display='none'">
+                            <div style="flex:1">
+                                <span style="font-weight:600">${e.person}</span>
+                                <span class="${dirClass}"> ${e.direction}</span>
+                                <span class="conf-badge ${confClass}">${e.confidence}</span>
+                                <span style="font-size:11px;color:#666"> via ${e.camera}</span>
+                            </div>
+                            <span style="font-size:12px;color:#888">${e.timestamp}</span>
+                        </div>`;
+                    }).join('');
+                }
+
+                // Tracks
+                const tracks = await tracksRes.json();
+                const trackTbody = document.getElementById('trackBody');
+                document.getElementById('trackCount').textContent = tracks.length + ' tracks';
+                if (tracks.length === 0) {
+                    trackTbody.innerHTML = '<tr><td colspan="7" style="color:#666;text-align:center;padding:20px">No active tracks</td></tr>';
+                } else {
+                    trackTbody.innerHTML = tracks.map(t => {
+                        const status = t.event_emitted ? 'Event Emitted' : 'Tracking';
+                        const statusColor = t.event_emitted ? '#4ade80' : '#fbbf24';
+                        return `<tr>
+                            <td><div style="width:60px;height:45px;background:#222;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#666;font-size:10px">Live</div></td>
+                            <td style="font-family:monospace;font-size:11px">${t.track_id.substring(0, 20)}...</td>
+                            <td>${t.camera}</td>
+                            <td style="color:${statusColor};font-weight:600">${status}</td>
+                            <td>${t.frame_count}</td>
+                            <td>${t.trajectory_len} pts</td>
+                            <td>${t.first_seen}</td>
+                            <td>${t.last_seen}</td>
+                        </tr>`;
+                    }).join('');
+                }
+            } catch(e) { console.error('Refresh error:', e); }
+        }
+
+        refreshAll();
+        setInterval(refreshAll, 3000);
+    </script>
+</body>
+</html>

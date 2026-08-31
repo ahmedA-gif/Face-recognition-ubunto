@@ -1,0 +1,58 @@
+# ============================================================================
+# VisionAttend AI — Frigate Docker Compose (Stable)
+# ============================================================================
+
+services:
+  mqtt:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - ./data/mosquitto:/mosquitto/data
+
+  frigate:
+    image: ghcr.io/blakeblackshear/frigate:stable
+    restart: unless-stopped
+    privileged: true
+    shm_size: "512mb"
+    ports:
+      - "5005:5000"
+      - "8554:8554"
+      - "8555:8555/tcp"
+    extra_hosts:
+      - "192.168.2.112:host-gateway"
+      - "192.168.1.111:host-gateway"
+    volumes:
+      - ./config/frigate.yml:/config/config.yml
+      - ./data/frigate:/media/frigate
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      TZ: "Asia/Karachi"
+      FRIGATE_RTSP_PASSWORD: "admin1234"
+    depends_on:
+      - mqtt
+
+  attendance-bridge:
+    build: ./bridge
+    restart: unless-stopped
+    depends_on:
+      - mqtt
+      - frigate
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./data:/app/data
+      - ./data/snapshots:/app/data/snapshots
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      TZ: "Asia/Karachi"
+      MQTT_HOST: mqtt
+      MQTT_PORT: "1883"
+      FRIGATE_HOST: frigate
+      FRIGATE_API: "http://frigate:5000"
+      CAM_ENTRY_RTSP: "rtsp://admin:admin1234@192.168.2.112:554/cam/realmonitor?channel=1&subtype=1"
+      CAM_EXIT_RTSP: "rtsp://admin:admin1234@192.168.1.111:554/cam/realmonitor?channel=1&subtype=1"
+      DATABASE_URL: "postgresql://authenticator:npg_IaOx4mzXT2ib@ep-lively-hill-adqayuhc-pooler.c-2.us-east-1.aws.neon.tech/AI%20attendance%20system%20?sslmode=require"
+      WEB_PORT: "5001"

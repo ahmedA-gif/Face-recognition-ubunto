@@ -1,0 +1,178 @@
+# ============================================================================
+# Frigate NVR — VisionAttend AI (CPU-Optimized, 90+ Accuracy)
+# ============================================================================
+
+mqtt:
+  enabled: true
+  host: mqtt
+  port: 1883
+
+auth:
+  enabled: false
+
+detect:
+  enabled: true
+
+detectors:
+  cpu1:
+    type: cpu
+    num_threads: 2
+
+go2rtc:
+  streams:
+    cam_entry:
+      - rtsp://admin:admin1234@192.168.2.112:554/cam/realmonitor?channel=1&subtype=0
+    cam_entry_sub:
+      - rtsp://admin:admin1234@192.168.2.112:554/cam/realmonitor?channel=1&subtype=1
+    cam_exit:
+      - rtsp://admin:admin1234@192.168.1.111:554/cam/realmonitor?channel=1&subtype=0
+    cam_exit_sub:
+      - rtsp://admin:admin1234@192.168.1.111:554/cam/realmonitor?channel=1&subtype=1
+
+face_recognition:
+  enabled: true
+  model_size: large
+  recognition_threshold: 0.35
+  detection_threshold: 0.35
+  unknown_score: 0.50
+  min_area: 200
+  min_faces: 1
+  save_attempts: 500
+  blur_confidence_filter: false
+
+record:
+  enabled: true
+  alerts:
+    retain:
+      days: 30
+    pre_capture: 5
+    post_capture: 15
+  detections:
+    retain:
+      days: 30
+    pre_capture: 5
+    post_capture: 15
+
+snapshots:
+  enabled: true
+  bounding_box: true
+  retain:
+    default: 30
+
+cameras:
+  cam_entry:
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/cam_entry_sub
+          roles:
+            - detect
+        - path: rtsp://127.0.0.1:8554/cam_entry
+          roles:
+            - record
+    detect:
+      enabled: true
+      width: 640
+      height: 480
+      fps: 3
+    motion:
+      threshold: 30
+      contour_area: 50
+      improve_contrast: true
+    objects:
+      track:
+        - person
+      filters:
+        person:
+          min_score: 0.40
+          min_area: 3000
+          max_area: 100000
+          threshold: 0.55
+    zones:
+      outside_door:
+        coordinates: 0,320,640,320,640,480,0,480
+        objects:
+          - person
+        inertia: 3
+        loitering_time: 0
+      door_threshold:
+        coordinates: 0,240,640,240,640,320,0,320
+        objects:
+          - person
+        inertia: 3
+        loitering_time: 0
+      inside_room:
+        coordinates: 0,0,640,0,640,240,0,240
+        objects:
+          - person
+        inertia: 3
+        loitering_time: 0
+    review:
+      alerts:
+        required_zones:
+          - door_threshold
+          - inside_room
+          - outside_door
+    snapshots:
+      enabled: true
+      bounding_box: true
+      crop: false
+      height: 500
+
+  cam_exit:
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/cam_exit_sub
+          roles:
+            - detect
+        - path: rtsp://127.0.0.1:8554/cam_exit
+          roles:
+            - record
+    detect:
+      enabled: true
+      width: 640
+      height: 480
+      fps: 3
+    motion:
+      threshold: 30
+      contour_area: 50
+      improve_contrast: true
+    objects:
+      track:
+        - person
+      filters:
+        person:
+          min_score: 0.40
+          min_area: 3000
+          max_area: 100000
+          threshold: 0.55
+    zones:
+      inside_exit:
+        coordinates: 0,0,640,0,640,240,0,240
+        objects:
+          - person
+        inertia: 3
+        loitering_time: 0
+      door_exit:
+        coordinates: 0,240,640,240,640,370,0,370
+        objects:
+          - person
+        inertia: 3
+        loitering_time: 0
+      outside_exit:
+        coordinates: 0,370,640,370,640,480,0,480
+        objects:
+          - person
+        inertia: 3
+        loitering_time: 0
+    review:
+      alerts:
+        required_zones:
+          - door_exit
+          - outside_exit
+          - inside_exit
+    snapshots:
+      enabled: true
+      bounding_box: true
+      crop: false
+      height: 500
+version: 0.17-0
