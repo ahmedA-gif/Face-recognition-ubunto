@@ -19,6 +19,15 @@ def face_inside_person(face: np.ndarray, person: np.ndarray, margin: float = 0.0
     return (x1 - margin * w) <= fx <= (x2 + margin * w) and (y1 - margin * h) <= fy <= (y2 + margin * h)
 
 
+def face_to_head_distance(face_box: np.ndarray, person_box: np.ndarray) -> float:
+    """Distance from a face centre to the expected upper-body/head centre."""
+    fx, fy = _center(face_box)
+    x1, y1, x2, y2 = map(float, person_box)
+    head_x = (x1 + x2) / 2.0
+    head_y = y1 + (y2 - y1) * 0.20
+    return float(((fx - head_x) ** 2 + (fy - head_y) ** 2) ** 0.5)
+
+
 def appearance_signature(frame: np.ndarray, xyxy, n_bins: int = 16) -> np.ndarray | None:
     """Compact body-colour signature for appearance-based re-identification.
 
@@ -68,13 +77,13 @@ def attach_faces_to_tracks(
         face.match_score = score
         # attach to best overlapping track
         best: Track | None = None
-        best_area = 0.0
+        best_distance = float("inf")
         for t in tracks:
             if not face_inside_person(face.xyxy, t.xyxy):
                 continue
-            area = max(0.0, t.xyxy[2] - t.xyxy[0]) * max(0.0, t.xyxy[3] - t.xyxy[1])
-            if area > best_area:
-                best_area = area
+            distance = face_to_head_distance(face.xyxy, t.xyxy)
+            if distance < best_distance:
+                best_distance = distance
                 best = t
         if best is not None:
             best.meta["embedding"] = face.embedding

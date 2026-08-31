@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any, Dict, Optional
 
 import yaml
@@ -22,16 +23,29 @@ _ZONE_ALIASES = {
 }
 
 
+def _resolve_path(value: str, config_dir: Path) -> str:
+    """Normalize portable config paths, including legacy Windows project paths."""
+    stripped = re.sub(r"^[A-Za-z]:[/\\\\]", "", value)
+    stripped = re.sub(r"^Face-recognition-ubunto[/\\\\]", "", stripped, flags=re.IGNORECASE)
+    stripped = stripped.replace("\\", "/")
+    # Settings live in <project>/config; paths such as models/... are project
+    # relative, while a truly absolute POSIX path remains untouched.
+    candidate = Path(stripped)
+    if candidate.is_absolute():
+        return str(candidate)
+    return str(config_dir.parent / candidate)
+
+
 def load_settings(path: str | Path | None = None) -> dict[str, Any]:
     cfg_path = Path(path) if path else ROOT / "config" / "settings.yaml"
     with open(cfg_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
-    # Resolve relative paths against project root
+    config_dir = cfg_path.resolve().parent
+    # Only declared path-valued fields are resolved: blindly treating every
+    # slash-containing value as a path would corrupt RTSP and Redis URLs.
     for key in ("yolo_weights", "yolo_onnx", "tracker_config"):
-        if key in data.get("models", {}):
-            p = Path(data["models"][key])
-            if not p.is_absolute():
-                data["models"][key] = str(ROOT / p)
+        if key in data.get("models", {}) and data["models"][key]:
+            data["models"][key] = _resolve_path(data["models"][key], config_dir)
     for section, keys in (
         ("models", ("face_root", "person_reid_weights")),
         ("events", ("db_path", "faces_db_path", "snapshots_dir")),
@@ -41,9 +55,7 @@ def load_settings(path: str | Path | None = None) -> dict[str, Any]:
     ):
         for key in keys:
             if key in data.get(section, {}) and data[section][key]:
-                p = Path(data[section][key])
-                if not p.is_absolute():
-                    data[section][key] = str(ROOT / p)
+                data[section][key] = _resolve_path(data[section][key], config_dir)
     data["_root"] = str(ROOT)
     return data
 

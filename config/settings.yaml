@@ -15,12 +15,13 @@ models:
   yolo_iou: 0.5
   person_class_id: 0
   face_root: D:\Face-recognition-ubunto\models\face
-  face_pack: buffalo_s
+  face_pack: buffalo_l
   face_det_size:
-    - 320
-    - 320
-  face_match_threshold: 0.35
-  min_face_px: 1
+    - 640
+    - 640
+  face_match_threshold: 0.48
+  face_ambiguity_margin: 0.08
+  min_face_px: 40
   tracker: bytetrack
   tracker_config: D:\Face-recognition-ubunto\models\tracker\bytetrack.yaml
 
@@ -28,7 +29,7 @@ pipeline:
   device: cuda:0
   backend: onnx
   skip_frames: 2
-  face_every_n: 3
+  face_every_n: 2
   max_tracks: 50
 
 gpu:
@@ -49,9 +50,10 @@ crossing_line:
     x2: 0.9
     y2: 0.95
   entry_direction: downward  # camera inside looking at door; people enter by walking DOWN into room
-  min_track_frames: 3
+  min_track_frames: 8
   cooldown_sec: 2.0
   min_crossing_gap_sec: 1.0
+  dead_zone_px: 14.0
 
 # =============================================================================
 # DOOR INTELLIGENCE (POLYGON ZONES) - DISABLED (use crossing_line instead)
@@ -74,7 +76,7 @@ entry_exit:
   entry_direction: B_to_A  # B_to_A means: B side to A side = ENTRY
   buffer_threshold: 10.0    # Pixels for BUFFER zone
   debounce_sec: 1.5         # Lockout period after event
-  min_track_frames: 5      # Minimum track frames before processing
+  min_track_frames: 8      # Minimum track frames before processing
   min_deep_frames: 3        # Frames deep in state before event
   min_displacement: 20.0    # Minimum distance traveled
   use_foot_point: true      # Use foot point (bottom-center) for accuracy
@@ -92,7 +94,7 @@ identity_fusion:
   enabled: true
   max_stitch_dist_px: 60
   max_stitch_time_sec: 2.0
-  embedding_match_threshold: 0.42
+  embedding_match_threshold: 0.48
   appearance_match_threshold: 0.85
   person_reid_weights: ''
   reid_match_threshold: 0.82
@@ -107,7 +109,7 @@ auto_boundary:
   smoothing: true
 
 reasoning:
-  enabled: false
+  enabled: true
   window_bias: false
   morning_window:
     - 07:00

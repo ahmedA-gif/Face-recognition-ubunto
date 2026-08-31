@@ -21,6 +21,7 @@ class _ExpiredTrack:
     points: List[Tuple[float, float, float]] = field(default_factory=list)
     embedding: Optional[np.ndarray] = None
     appearance: Optional[np.ndarray] = None
+    camera_id: str = "cam_01"
 
 
 class IdentityFusionEngine:
@@ -57,12 +58,13 @@ class IdentityFusionEngine:
         self,
         max_stitch_dist_px: float = 60.0,
         max_stitch_time_sec: float = 2.0,
-        embedding_match_threshold: float = 0.42,
+        embedding_match_threshold: float = 0.48,
         appearance_match_threshold: float = 0.85,
         reid_match_threshold: float = 0.82,
         max_pool_embeddings: int = 8,
         max_expired: int = 300,
         state_path: Optional[str] = None,
+        camera_id: str = "cam_01",
     ) -> None:
         self.max_stitch_dist_px = max_stitch_dist_px
         self.max_stitch_time_sec = max_stitch_time_sec
@@ -72,6 +74,7 @@ class IdentityFusionEngine:
         self.max_pool_embeddings = max_pool_embeddings
         self.max_expired = max_expired
         self.state_path = state_path
+        self.camera_id = camera_id
 
         self.track_identity: Dict[int, str] = {}            # track_id -> global_person_id
         self.identity_name: Dict[str, str] = {}             # global_id -> display name
@@ -81,6 +84,7 @@ class IdentityFusionEngine:
         self._history: Dict[int, deque] = {}                # track_id -> [(x, y, t)]
         self._expired: List[_ExpiredTrack] = []
         self._guest_counter = 0
+        self.identity_camera: Dict[str, str] = {}
 
         self.stitch_count = 0
         self.face_merge_count = 0
@@ -111,6 +115,7 @@ class IdentityFusionEngine:
                 str(gid): [np.asarray(r, dtype=np.float32) for r in embs]
                 for gid, embs in (data.get("reid_pools") or {}).items()
             }
+            self.identity_camera = {str(gid): str(camera) for gid, camera in (data.get("identity_camera") or {}).items()}
             print(f"[IdentityFusion] restored {len(self.pools)} identity(s) "
                   f"from {self.state_path} (guest_counter={self._guest_counter})")
         except Exception as exc:  # noqa: BLE001
@@ -136,6 +141,7 @@ class IdentityFusionEngine:
                     gid: [r.tolist() for r in embs]
                     for gid, embs in self.reid_pools.items()
                 },
+                "identity_camera": self.identity_camera,
             }
             tmp = self.state_path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
@@ -232,6 +238,7 @@ class IdentityFusionEngine:
             self._update_appearance_pool(identity, app)
 
         self.track_identity[tid] = identity
+        self.identity_camera[identity] = self.camera_id
         t.meta["global_id"] = identity
         t.person_name = self.identity_name.get(identity, identity)
 
@@ -402,6 +409,17 @@ class IdentityFusionEngine:
             gap = now - exp.exp_time
             if gap > self.max_stitch_time_sec:
                 continue
+            # Different cameras do not share pixel geometry. A cross-camera
+            # stitch is allowed only with face-embedding evidence; normal
+            # spatial stitching remains strictly same-camera.
+            if exp.camera_id != self.camera_id:
+                emb = t.meta.get("embedding")
+                if emb is None or exp.embedding is None or float(emb @ exp.embedding) < self.embedding_match_threshold:
+                    continue
+                dist = 0.0
+                if gap < best_gap:
+                    best, best_gap, best_dist = exp, gap, dist
+                continue
             ex, ey = exp.last_centroid
             dist = float(((cx - ex) ** 2 + (cy - ey) ** 2) ** 0.5)
             if dist > self.max_stitch_dist_px:
@@ -435,6 +453,7 @@ class IdentityFusionEngine:
                         points=list(pts),
                         embedding=self.pools.get(gid, [None])[0] if self.pools.get(gid) else None,
                         appearance=self.appearance_pools.get(gid, [None])[0] if self.appearance_pools.get(gid) else None,
+                        camera_id=self.camera_id,
                     )
                 )
             self._history.pop(tid, None)

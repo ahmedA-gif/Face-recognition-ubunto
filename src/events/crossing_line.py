@@ -27,7 +27,7 @@ from shapely.geometry import LineString, Point
 
 from src.events.store import Event, EventsStore
 from src.tracking.bytetrack import Track
-from src.utils.geometry import foot_point
+from src.utils.geometry import foot_point, signed_distance
 
 
 @dataclass
@@ -57,6 +57,7 @@ class CrossingLineEngine:
         cooldown_sec: float = 2.0,
         min_crossing_gap_sec: float = 1.0,
         min_displacement: float = 0.01,
+        dead_zone_px: float = 14.0,
     ) -> None:
         self.line_norm = line_norm
         self.entry_direction = entry_direction
@@ -65,6 +66,7 @@ class CrossingLineEngine:
         self.cooldown_sec = cooldown_sec
         self.min_crossing_gap_sec = min_crossing_gap_sec
         self.min_displacement = min_displacement
+        self.dead_zone_px = dead_zone_px
 
         self.counts: Dict[str, int] = {"entry": 0, "exit": 0, "present": 0}
         self._tracks: Dict[Hashable, _TrackState] = {}
@@ -88,7 +90,9 @@ class CrossingLineEngine:
         alive: set = set()
 
         for t in tracks:
-            key = t.track_id
+            # Identity fusion runs before this engine. Keep the state through a
+            # ByteTrack ID switch when a stable global identity is available.
+            key = t.meta.get("global_id") or t.track_id
             alive.add(key)
             st = self._tracks.get(key)
             if st is None:
@@ -127,7 +131,7 @@ class CrossingLineEngine:
 
                     if cross_dir == "inward" and not st.counted_entry:
                         direction_label = "inward"
-                        if now - st.last_event_time > self.min_crossing_gap_sec:
+                        if now - st.last_event_time > max(self.min_crossing_gap_sec, self.cooldown_sec):
                             event = self._fire(t, "entry", now, zone)
                             st.counted_entry = True
                             st.zone = "INSIDE"
@@ -135,7 +139,7 @@ class CrossingLineEngine:
 
                     elif cross_dir == "outward" and not st.counted_exit:
                         direction_label = "outward"
-                        if now - st.last_event_time > self.min_crossing_gap_sec:
+                        if now - st.last_event_time > max(self.min_crossing_gap_sec, self.cooldown_sec):
                             event = self._fire(t, "exit", now, zone)
                             st.counted_exit = True
                             st.zone = "OUTSIDE"
@@ -176,30 +180,23 @@ class CrossingLineEngine:
         return LineString([(x1 * w, y1 * h), (x2 * w, y2 * h)])
 
     def _classify_side(self, pos: Tuple[float, float]) -> str:
-        x, y = pos
-        lx1, ly1, lx2, ly2 = self.line_norm
-
-        # Dead zone: if within ±5 pixels of the line, keep previous zone
-        # This prevents jitter oscillation right at the crossing
-        if abs(lx2 - lx1) > abs(ly2 - ly1):
-            dist = abs(y - ly1 * self._frame_h)
-        else:
-            dist = abs(x - lx1 * self._frame_w)
-        if dist < 5.0:
+        """Classify a pixel foot point against a pixel-space signed line."""
+        px1, py1 = self.line_norm[0] * self._frame_w, self.line_norm[1] * self._frame_h
+        px2, py2 = self.line_norm[2] * self._frame_w, self.line_norm[3] * self._frame_h
+        dist = signed_distance(pos, ((px1, py1), (px2, py2)))
+        # A consistent pixel-space dead zone prevents diagonal-line jitter.
+        if abs(dist) < self.dead_zone_px:
             return "ON_LINE"
 
-        cross = (lx2 - lx1) * (y - ly1) - (ly2 - ly1) * (x - lx1)
-
         if self.entry_direction == "upward":
-            return "OUTSIDE" if cross < 0 else "INSIDE"
+            return "OUTSIDE" if dist < 0 else "INSIDE"
         elif self.entry_direction == "downward":
-            # downward entry: people end up below the line (cross>0) = INSIDE
-            return "INSIDE" if cross > 0 else "OUTSIDE"
+            return "INSIDE" if dist > 0 else "OUTSIDE"
         elif self.entry_direction == "rightward":
-            return "OUTSIDE" if cross > 0 else "INSIDE"
+            return "OUTSIDE" if dist > 0 else "INSIDE"
         elif self.entry_direction == "leftward":
-            return "INSIDE" if cross > 0 else "OUTSIDE"
-        return "OUTSIDE" if cross < 0 else "INSIDE"
+            return "INSIDE" if dist > 0 else "OUTSIDE"
+        return "OUTSIDE" if dist < 0 else "INSIDE"
 
     def _crossing_direction(
         self,

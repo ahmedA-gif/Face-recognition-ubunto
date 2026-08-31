@@ -167,6 +167,9 @@ class EntryExitEngineV2:
     
     # Line configuration (normalized 0-1 coordinates)
     line_norm: Dict[str, float]  # x1, y1, x2, y2 in normalized [0, 1] space
+    # B_to_A means negative signed-distance side crosses to positive (default).
+    # A_to_B reverses that mapping for cameras whose line is drawn oppositely.
+    entry_direction: str = "B_to_A"
     
     # Thresholds and parameters
     buffer_threshold: float = 10.0       # Pixels for BUFFER zone
@@ -306,12 +309,34 @@ class EntryExitEngineV2:
             BUFFER: near the line (within buffer_threshold)
             INSIDE: far from line on positive side
         """
-        if distance > self.buffer_threshold:
+        oriented_distance = self._inside_distance(distance)
+        if oriented_distance > self.buffer_threshold:
             return TrackState.INSIDE
-        elif distance < -self.buffer_threshold:
+        elif oriented_distance < -self.buffer_threshold:
             return TrackState.OUTSIDE
         else:
             return TrackState.BUFFER
+
+    def _inside_distance(self, distance: float) -> float:
+        """Map raw signed distance to positive=inside using configured direction."""
+        return -distance if self.entry_direction.upper() == "A_TO_B" else distance
+
+    def _normal_velocity(self, velocity: Tuple[float, float]) -> float:
+        """Rate of change of signed distance (positive means toward INSIDE).
+
+        The old code projected motion onto the *line tangent*, which reverses
+        classifications for diagonal/vertical lines. The signed-distance
+        normal is the only direction relevant to crossing a boundary.
+        """
+        if self._line is None:
+            return 0.0
+        (x1, y1), (x2, y2) = self._line
+        length = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+        if length < 1e-9:
+            return 0.0
+        vx, vy = velocity
+        raw_rate = (vx * -(y2 - y1) + vy * (x2 - x1)) / length
+        return self._inside_distance(raw_rate)
     
     def _get_zone_from_distance(self, distance: float, current_state: TrackState = TrackState.OUTSIDE, 
                                  velocity: Tuple[float, float] = (0.0, 0.0)) -> TrackState:
@@ -330,15 +355,9 @@ class EntryExitEngineV2:
         vx, vy = velocity
         speed = (vx**2 + vy**2)**0.5
         
-        # Determine direction of movement relative to line
-        line_vec = (self._line[1][0] - self._line[0][0], self._line[1][1] - self._line[0][1])
-        line_length = (line_vec[0]**2 + line_vec[1]**2)**0.5
-        if line_length > 0:
-            line_vec = (line_vec[0] / line_length, line_vec[1] / line_length)
-        
-        dot_product = vx * line_vec[0] + vy * line_vec[1]
-        is_toward_inside = dot_product > 0.1
-        is_toward_outside = dot_product < -0.1
+        normal_speed = self._normal_velocity((vx, vy))
+        is_toward_inside = normal_speed > 0.1
+        is_toward_outside = normal_speed < -0.1
         is_fast = speed > 0.5
         
         # Get raw spatial zone
@@ -390,18 +409,9 @@ class EntryExitEngineV2:
         vx, vy = velocity
         speed = (vx**2 + vy**2)**0.5
         
-        # Determine direction of movement relative to line
-        line_vec = (self._line[1][0] - self._line[0][0], self._line[1][1] - self._line[0][1])
-        line_length = (line_vec[0]**2 + line_vec[1]**2)**0.5
-        if line_length > 0:
-            line_vec = (line_vec[0] / line_length, line_vec[1] / line_length)
-        
-        # Dot product: positive = moving in direction of line, negative = opposite
-        dot_product = vx * line_vec[0] + vy * line_vec[1]
-        
-        # Check if moving toward INSIDE (positive distance side)
-        is_toward_inside = dot_product > 0.1
-        is_toward_outside = dot_product < -0.1
+        normal_speed = self._normal_velocity((vx, vy))
+        is_toward_inside = normal_speed > 0.1
+        is_toward_outside = normal_speed < -0.1
         is_fast = speed > 0.5
         
         # Current zone based on distance
@@ -566,20 +576,14 @@ class EntryExitEngineV2:
             # Check if direction is consistent with event
             if event_type == "ENTRY":
                 # Should be moving toward INSIDE (positive distance side)
-                line_vec = (self._line[1][0] - self._line[0][0], self._line[1][1] - self._line[0][1])
-                if line_vec[0]**2 + line_vec[1]**2 > 0:
-                    dot = avg_vx * line_vec[0] + avg_vy * line_vec[1]
-                    if dot <= 0:
-                        logger.debug(f"Trajectory validation failed: inconsistent direction for ENTRY")
-                        return False
+                if self._normal_velocity((avg_vx, avg_vy)) <= 0:
+                    logger.debug(f"Trajectory validation failed: inconsistent direction for ENTRY")
+                    return False
             elif event_type == "EXIT":
                 # Should be moving toward OUTSIDE (negative distance side)
-                line_vec = (self._line[1][0] - self._line[0][0], self._line[1][1] - self._line[0][1])
-                if line_vec[0]**2 + line_vec[1]**2 > 0:
-                    dot = avg_vx * line_vec[0] + avg_vy * line_vec[1]
-                    if dot >= 0:
-                        logger.debug(f"Trajectory validation failed: inconsistent direction for EXIT")
-                        return False
+                if self._normal_velocity((avg_vx, avg_vy)) >= 0:
+                    logger.debug(f"Trajectory validation failed: inconsistent direction for EXIT")
+                    return False
         
         # Check 3: Minimum displacement
         if len(history.trajectory) >= 2:

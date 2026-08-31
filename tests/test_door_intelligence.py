@@ -83,7 +83,7 @@ class TestWalkThrough:
         assert events[0].person == "Guest#001"
         # Keep standing inside → no second ENTRY (lock holds).
         for _ in range(10):
-            events += eng.update([_track(1, 80)], (100, 100, 3), store)
+            events += eng.update([_track(1, 80, gid="Guest#001")], (100, 100, 3), store)
         assert len(events) == 1
         store.close()
 

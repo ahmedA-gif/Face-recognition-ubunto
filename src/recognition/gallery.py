@@ -30,12 +30,14 @@ class FaceGallery:
     def __init__(
         self,
         db_path: str = "",
-        match_threshold: float = 0.42,
+        match_threshold: float = 0.48,
+        ambiguity_margin: float = 0.08,
         backend: str = "faiss",
         index_path: str | None = None,
     ) -> None:
         self.db_path = db_path
         self.match_threshold = match_threshold
+        self.ambiguity_margin = ambiguity_margin
         self.index_path = index_path or "data/db/faces.faiss"
 
         _req = backend.lower().strip()
@@ -97,7 +99,7 @@ class FaceGallery:
             return None
         try:
             index = faiss.read_index(self.index_path)
-            if index.ntotal != expected or index.d == dim:
+            if index.ntotal != expected or index.d != dim:
                 return None
             return index
         except Exception:
@@ -181,23 +183,33 @@ class FaceGallery:
             rows.append((name, emb.tobytes(), int(emb.size)))
         execute_many("INSERT INTO faces(name, embedding, dim) VALUES (%s, %s, %s)", rows)
         self.reload()
+        # Batch enrollment must leave the on-disk FAISS index in step with the
+        # committed DB rows, even if the process is interrupted afterward.
+        self._persist_faiss()
         return len(rows)
 
     def match(self, embedding: np.ndarray) -> Tuple[str, float]:
         if self._matrix is None or len(self._names) == 0:
             return "Unknown", 0.0
         emb = self._normalize(embedding)
+        second_score = -1.0
         if self.backend == "faiss" and self._faiss_index is not None:
-            scores, indices = self._faiss_index.search(emb.reshape(1, -1), 1)
+            scores, indices = self._faiss_index.search(emb.reshape(1, -1), min(2, len(self._names)))
             idx = int(indices[0][0])
             score = float(scores[0][0])
+            if scores.shape[1] > 1:
+                second_score = float(scores[0][1])
             if idx < 0 or idx >= len(self._names):
                 return "Unknown", 0.0
         else:
             sims = self._matrix_view() @ emb
             idx = int(np.argmax(sims))
             score = float(sims[idx])
-        if score >= self.match_threshold:
+            if len(sims) > 1:
+                second_score = float(np.partition(sims, -2)[-2])
+        # A close runner-up is not an identity decision. Returning Unknown here
+        # prevents an ambiguous face from contaminating fusion/attendance.
+        if score >= self.match_threshold and (second_score < 0 or score - second_score >= self.ambiguity_margin):
             return self._names[idx], score
         return "Unknown", score
 

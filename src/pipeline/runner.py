@@ -27,6 +27,7 @@ from src.tracking.bytetrack import ByteTracker, Track
 from src.tracking.identity_fusion import IdentityFusionEngine
 from src.utils.assign import attach_faces_to_tracks, appearance_signature
 from src.utils.config import load_zones
+from src.utils.geometry import foot_point
 
 
 def _line_dict_to_tuple(line):
@@ -102,6 +103,7 @@ def _build_components(cfg: dict[str, Any]):
     gallery = FaceGallery(
         db_path=ev["faces_db_path"],
         match_threshold=m["face_match_threshold"],
+        ambiguity_margin=m.get("face_ambiguity_margin", 0.08),
         backend="faiss",
     )
     print(f"[Pipeline] {gallery.status()}")
@@ -111,6 +113,7 @@ def _build_components(cfg: dict[str, Any]):
     # DoorIntelligence can be enabled as an alternative
     entry_exit = EntryExitEngineV2(
         line_norm=ee["line"],
+        entry_direction=ee.get("entry_direction", "B_to_A"),
         buffer_threshold=ee.get("buffer_threshold", 10.0),
         debounce_sec=ee.get("debounce_sec", 1.5),
         min_track_frames=ee.get("min_track_frames", 5),
@@ -142,6 +145,7 @@ def _build_components(cfg: dict[str, Any]):
             min_track_frames=cl.get("min_track_frames", ee.get("min_track_frames", 3)),
             cooldown_sec=cl.get("cooldown_sec", 2.0),
             min_crossing_gap_sec=cl.get("min_crossing_gap_sec", 1.0),
+            dead_zone_px=cl.get("dead_zone_px", 14.0),
         )
     elif using_door_engine:
         zones = dict(di.get("zones") or {}) or load_zones(
@@ -207,6 +211,7 @@ def _build_components(cfg: dict[str, Any]):
             reid_match_threshold=if_in.get("reid_match_threshold", 0.82),
             max_pool_embeddings=if_in.get("max_pool_embeddings", 8),
             state_path=if_in.get("state_path", "data/db/identity_state.json"),
+            camera_id=if_in.get("camera_id", ee.get("camera_id", "cam_01")),
         )
     else:
         fusion = None
@@ -441,6 +446,11 @@ def run_pipeline(
 
                 run_det = (frames_processed - 1) % max(1, skip_frames) == 0
                 run_face = (frames_processed - 1) % max(1, face_every_n) == 0
+                # The FSM state is from the preceding frame.  When a person
+                # reaches the door band, bypass cadence so a fast crosser gets
+                # a face attempt before the event is finalized.
+                door_states = {"APPROACHING", "BUFFER", "CROSSING", "APPROACHING_EXIT"}
+                run_face = run_face or any(t.meta.get("entry_exit_state") in door_states for t in tracks)
                 run_reid = (frames_processed - 1) % max(1, reid_every_n) == 0
 
                 if run_det:
@@ -521,10 +531,9 @@ def run_pipeline(
                         changed = _dbg_prev_state.get(t.track_id) != state_key
                         _dbg_prev_state[t.track_id] = state_key
                         if is_new or changed:
-                            from src.utils.geometry import foot_point as _fp
-                            _fp = _fp(t.xyxy)
-                            _fx = _fp[0] / frame.shape[1]
-                            _fy = _fp[1] / frame.shape[0]
+                            feet = foot_point(t.xyxy)
+                            _fx = feet[0] / frame.shape[1]
+                            _fy = feet[1] / frame.shape[0]
                             _printed_tracks.add(t.track_id)
                             tag = "NEW" if is_new else "upd"
                             print(
