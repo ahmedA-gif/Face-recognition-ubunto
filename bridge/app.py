@@ -962,7 +962,7 @@ def _match_face_from_snapshot(snapshot_url):
         if score > best_score:
             best_score = score
             best_name = name
-    if best_name and best_score > 0.55:
+    if best_name and best_score > 0.75:
         return (best_name, best_score)
     return None
 
