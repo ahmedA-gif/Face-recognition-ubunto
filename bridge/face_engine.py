@@ -31,12 +31,12 @@ GALLERY_DIR = "/app/data/faces_gallery"
 EMBEDDING_CACHE_TTL = 300  # rebuild gallery every 5 min
 
 # Thresholds
-MATCH_THRESHOLD = 0.45      # cosine similarity threshold (ArcFace typical: 0.3-0.6)
-MIN_MARGIN = 0.08           # top1 - top2 must exceed this (prevents ambiguous matches)
+MATCH_THRESHOLD = 0.20      # cosine similarity threshold — lowered for CCTV snapshots (small, blurry)
+MIN_MARGIN = 0.03           # top1 - top2 across DIFFERENT identities — prevents cross-person confusion
 MIN_FACE_SIZE = 40          # minimum face crop size in pixels
-QUALITY_MIN = 0.3           # minimum detection score for face to be used
+QUALITY_MIN = 0.2           # minimum detection score for face to be used
 TEMPORAL_WINDOW = 5         # require N consecutive same-name matches
-TEMPORAL_CONFIDENCE = 3     # minimum votes to confirm identity
+TEMPORAL_CONFIDENCE = 2     # minimum votes to confirm identity
 
 # Model selection
 MODEL_NAME = os.environ.get("FACE_MODEL", "buffalo_s")  # buffalo_s or antelopev2
@@ -74,23 +74,36 @@ class FaceEngine:
             except Exception as e:
                 print(f"[FaceEngine] Auto-select failed, using default: {e}")
 
-        try:
-            import insightface
-            from insightface.app import FaceAnalysis
+        # Try loading model, if corrupted, delete and retry
+        for attempt in range(2):
+            try:
+                import insightface
+                from insightface.app import FaceAnalysis
 
-            print(f"[FaceEngine] Loading InsightFace model: {selected_model}")
-            self._app = FaceAnalysis(
-                name=selected_model,
-                providers=["CPUExecutionProvider"],
-                allowed_modules=["detection", "recognition"],
-            )
-            self._app.prepare(ctx_id=0, det_size=(640, 480))
-            self._model_name = selected_model
-            print(f"[FaceEngine] Model loaded: {selected_model}")
-            return True
-        except Exception as e:
-            print(f"[FaceEngine] Failed to load model: {e}")
-            return False
+                print(f"[FaceEngine] Loading InsightFace model: {selected_model}")
+                self._app = FaceAnalysis(
+                    name=selected_model,
+                    providers=["CPUExecutionProvider"],
+                    allowed_modules=["detection", "recognition"],
+                )
+                self._app.prepare(ctx_id=0, det_size=(640, 480))
+                self._model_name = selected_model
+                print(f"[FaceEngine] Model loaded: {selected_model}")
+                return True
+            except Exception as e:
+                print(f"[FaceEngine] Failed to load model (attempt {attempt+1}): {e}")
+                if "decompress" in str(e) or "block type" in str(e):
+                    # Corrupted model, delete and retry
+                    import shutil
+                    model_dir = os.path.expanduser(f"~/.insightface/models/{selected_model}")
+                    if os.path.exists(model_dir):
+                        print(f"[FaceEngine] Deleting corrupted model: {model_dir}")
+                        shutil.rmtree(model_dir, ignore_errors=True)
+                self._app = None
+                if attempt == 0:
+                    continue
+                return False
+        return False
 
     def _build_gallery(self):
         """Build FAISS index from Frigate face directories."""
@@ -228,19 +241,31 @@ class FaceEngine:
         emb_query = emb.astype(np.float32).reshape(1, -1)
         faiss.normalize_L2(emb_query)
 
-        # Search FAISS index (top-2 for margin test)
-        k = min(2, self._gallery_index.ntotal)
+        # Search FAISS index — get enough to find 2 different identities
+        k = min(self._gallery_index.ntotal, 50)
         scores, indices = self._gallery_index.search(emb_query, k)
 
-        top1_score = float(scores[0][0])
-        top1_idx = int(indices[0][0])
-        top1_name = self._gallery_names[top1_idx] if top1_idx >= 0 else None
+        # Find top-2 DIFFERENT identities for margin test
+        top1_name = None
+        top1_score = 0.0
+        top2_name = None
+        top2_score = 0.0
 
-        top2_score = float(scores[0][1]) if k > 1 else 0.0
-        top2_idx = int(indices[0][1]) if k > 1 else -1
-        top2_name = self._gallery_names[top2_idx] if top2_idx >= 0 else None
+        for i in range(min(k, scores.shape[1])):
+            idx = int(indices[0][i])
+            score = float(scores[0][i])
+            if idx < 0:
+                continue
+            name = self._gallery_names[idx]
+            if top1_name is None:
+                top1_name = name
+                top1_score = score
+            elif name != top1_name:
+                top2_name = name
+                top2_score = score
+                break
 
-        margin = top1_score - top2_score
+        margin = top1_score - top2_score if top1_name and top2_name else top1_score
 
         # ─── Threshold + Margin Test ───
         # Require: top1 above threshold AND margin is large enough

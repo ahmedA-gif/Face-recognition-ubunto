@@ -45,8 +45,11 @@ services:
     volumes:
       - ./data:/app/data
       - ./data/snapshots:/app/data/snapshots
+      - ./bridge/app.py:/app/app.py
       - ./bridge/face_engine.py:/app/face_engine.py
       - ./bridge/face_evaluator.py:/app/face_evaluator.py
+      - ./bridge/templates/bridge_dashboard.html:/app/templates/bridge_dashboard.html
+      - insightface-cache:/root/.insightface
       - /etc/localtime:/etc/localtime:ro
     environment:
       TZ: "Asia/Karachi"
@@ -58,3 +61,6 @@ services:
       CAM_EXIT_RTSP: "rtsp://admin:admin1234@192.168.1.111:554/cam/realmonitor?channel=1&subtype=1"
       DATABASE_URL: "postgresql://authenticator:npg_IaOx4mzXT2ib@ep-lively-hill-adqayuhc-pooler.c-2.us-east-1.aws.neon.tech/AI%20attendance%20system%20?sslmode=require"
       WEB_PORT: "5001"
+
+volumes:
+  insightface-cache:

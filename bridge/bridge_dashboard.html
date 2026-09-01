@@ -114,48 +114,6 @@
             </div>
         </div>
 
-        <!-- Face Engine Status -->
-        <div class="section">
-            <div class="section-header">
-                <h2>Face Engine Status</h2>
-                <span style="font-size:12px;color:#666" id="engineStatus">Loading...</span>
-            </div>
-            <div class="section-body">
-                <div class="grid-4" id="engineStats">
-                    <div class="stat-card"><h3>Model</h3><div class="value" id="engModel" style="font-size:20px">-</div></div>
-                    <div class="stat-card"><h3>Gallery</h3><div class="value" id="engGallery">0</div><div class="sub">embeddings</div></div>
-                    <div class="stat-card"><h3>Match Threshold</h3><div class="value" id="engThreshold" style="font-size:24px">-</div></div>
-                    <div class="stat-card"><h3>Min Margin</h3><div class="value" id="engMargin" style="font-size:24px">-</div></div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Model Evaluation Report -->
-        <div class="section">
-            <div class="section-header">
-                <h2>Model Evaluation Report</h2>
-                <button onclick="runEvaluation()" id="evalBtn" style="padding:6px 16px;border-radius:6px;border:1px solid #00d4ff;background:transparent;color:#00d4ff;cursor:pointer;font-size:13px">Run Evaluation</button>
-            </div>
-            <div class="section-body" style="padding:0;overflow-x:auto">
-                <div id="evalStatus" style="padding:16px;color:#666;font-size:13px">Click "Run Evaluation" to benchmark models (buffalo_s, antelopev2, buffalo_l) on your CCTV data.</div>
-                <table class="timeline-table" id="evalTable" style="display:none">
-                    <thead>
-                        <tr>
-                            <th>Model</th>
-                            <th>FAR</th>
-                            <th>FRR</th>
-                            <th>Rank-1</th>
-                            <th>AUC</th>
-                            <th>CCTV FPS</th>
-                            <th>Threshold</th>
-                            <th>Best</th>
-                        </tr>
-                    </thead>
-                    <tbody id="evalBody"></tbody>
-                </table>
-            </div>
-        </div>
-
         <!-- Person Timeline -->
         <div class="section">
             <div class="section-header">
@@ -311,85 +269,11 @@
                         </tr>`;
                     }).join('');
                 }
-                } catch(e) { console.error('Refresh error:', e); }
-        }
-
-        // Face Engine Status
-        async function refreshEngine() {
-            try {
-                const res = await fetch('/api/face/engine/status');
-                const data = await res.json();
-                document.getElementById('engModel').textContent = data.model || '-';
-                document.getElementById('engGallery').textContent = data.gallery_size || 0;
-                document.getElementById('engThreshold').textContent = (data.match_threshold || 0).toFixed(2);
-                document.getElementById('engMargin').textContent = (data.min_margin || 0).toFixed(2);
-                document.getElementById('engineStatus').textContent =
-                    `Gallery: ${(data.gallery_people||[]).join(', ')} | Last build: ${data.last_build || 'never'}`;
-            } catch(e) { console.error('Engine status error:', e); }
-        }
-
-        // Model Evaluation
-        async function runEvaluation() {
-            const btn = document.getElementById('evalBtn');
-            const status = document.getElementById('evalStatus');
-            btn.disabled = true;
-            btn.textContent = 'Evaluating...';
-            status.innerHTML = '<span style="color:#fbbf24">Running evaluation on buffalo_s, antelopev2, buffalo_l... This may take 2-5 minutes.</span>';
-            try {
-                const res = await fetch('/api/face/evaluate', { method: 'POST', headers: {'Content-Type':'application/json'} });
-                const data = await res.json();
-                if (data.error) {
-                    status.innerHTML = `<span style="color:#f87171">Error: ${data.error}</span>`;
-                } else {
-                    showEvalReport(data);
-                }
-            } catch(e) {
-                status.innerHTML = `<span style="color:#f87171">Error: ${e.message}</span>`;
-            }
-            btn.disabled = false;
-            btn.textContent = 'Run Evaluation';
-        }
-
-        async function loadEvalReport() {
-            try {
-                const res = await fetch('/api/face/evaluate/report');
-                const data = await res.json();
-                if (data.results && Object.keys(data.results).length > 0) {
-                    showEvalReport(data);
-                }
-            } catch(e) {}
-        }
-
-        function showEvalReport(data) {
-            const status = document.getElementById('evalStatus');
-            const table = document.getElementById('evalTable');
-            const tbody = document.getElementById('evalBody');
-            status.style.display = 'none';
-            table.style.display = 'table';
-
-            const results = data.results || {};
-            const best = data.best_model || '';
-            tbody.innerHTML = Object.values(results).map(m => {
-                if (m.error) return `<tr><td>${m.model||'?'}</td><td colspan="7" style="color:#f87171">${m.error}</td></tr>`;
-                const isBest = m.model === best;
-                return `<tr style="${isBest?'background:#1a2e1a':''}">
-                    <td><strong>${m.model}</strong></td>
-                    <td>${(m.far*100).toFixed(2)}%</td>
-                    <td>${(m.frr*100).toFixed(2)}%</td>
-                    <td>${(m.rank1_accuracy*100).toFixed(1)}%</td>
-                    <td>${(m.auc*100).toFixed(1)}%</td>
-                    <td>${m.cctv_fps.toFixed(1)}</td>
-                    <td>${m.optimal_threshold.toFixed(3)}</td>
-                    <td>${isBest?'<span style="color:#4ade80;font-weight:700">BEST</span>':''}</td>
-                </tr>`;
-            }).join('');
+            } catch(e) { console.error('Refresh error:', e); }
         }
 
         refreshAll();
-        refreshEngine();
-        loadEvalReport();
         setInterval(refreshAll, 3000);
-        setInterval(refreshEngine, 30000);
     </script>
 </body>
 </html>

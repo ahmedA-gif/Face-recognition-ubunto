@@ -641,7 +641,7 @@ def _process_person_event(event):
     # Skip if Frigate already said unknown
     if not person_name and not frigate_says_unknown:
         snapshot_url = f"{FRIGATE_API}/api/events/{event_id}/snapshot.jpg"
-        face_match = _match_face_from_snapshot(snapshot_url)
+        face_match = _match_face_from_snapshot(snapshot_url, event_id)
         if face_match:
             person_name, face_score = face_match
             print(f"[Face] Snapshot match: {event_id} -> {person_name} (score={face_score:.2f})")
@@ -866,10 +866,14 @@ def _match_face_from_snapshot(snapshot_url, track_id=None):
     try:
         from face_engine import get_engine
         engine = get_engine()
-        name, confidence, top1, top2, margin = engine.recognize_from_url(snapshot_url, track_id)
+        name, confidence, top1, top2, margin = engine.recognize_from_url(
+            snapshot_url, track_id=str(track_id) if track_id else None
+        )
         if name:
-            print(f"[FaceEngine] {snapshot_url} -> {name} (conf={confidence:.3f}, margin={margin:.3f})")
+            print(f"[FaceEngine] MATCH: {snapshot_url} -> {name} (conf={confidence:.3f}, top1={top1:.3f}, top2={top2:.3f}, margin={margin:.3f})")
             return (name, confidence)
+        else:
+            print(f"[FaceEngine] NO MATCH: {snapshot_url} (top1={top1:.3f}, top2={top2:.3f}, margin={margin:.3f})")
     except ImportError:
         print("[FaceEngine] face_engine module not found, skipping")
     except Exception as e:
@@ -958,12 +962,12 @@ def _scan_face_train_files():
             try:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT id, track_id, event_time, date, snapshot_url FROM person_events "
+                        "SELECT id, track_id, event_time, date FROM person_events "
                         "WHERE person_name LIKE 'Unknown%%'"
                     )
                     rows = cur.fetchall()
                     for row in rows:
-                        pe_id, pe_track_id, pe_time, pe_date, pe_snapshot = row
+                        pe_id, pe_track_id, pe_time, pe_date = row
                         try:
                             dt = datetime.strptime(f"{pe_date} {pe_time}", "%Y-%m-%d %H:%M:%S")
                             pe_ts = dt.timestamp()
@@ -974,16 +978,21 @@ def _scan_face_train_files():
                         best_dist = 999
 
                         # Method 1: Try FaceEngine ArcFace recognition on snapshot
-                        if face_engine and face_engine._built and pe_snapshot:
+                        if face_engine and face_engine._built:
                             try:
+                                # Build snapshot URL from Frigate using track_id as event_id
+                                snapshot_url = f"{FRIGATE_API}/api/events/{pe_track_id}/snapshot.jpg"
+
                                 arc_name, arc_conf, _, _, arc_margin = face_engine.recognize_from_url(
-                                    pe_snapshot, pe_track_id
+                                    snapshot_url, str(pe_track_id)
                                 )
-                                if arc_name and arc_conf >= 0.45 and arc_margin >= 0.08:
+                                if arc_name and arc_conf >= 0.20 and arc_margin >= 0.03:
                                     best_name = arc_name
                                     best_dist = 0
                                     print(f"[FaceScan] ArcFace match: {pe_track_id} -> {arc_name} "
                                           f"(conf={arc_conf:.3f}, margin={arc_margin:.3f})")
+                                else:
+                                    print(f"[FaceScan] ArcFace no match: conf={arc_conf:.3f} margin={arc_margin:.3f}")
                             except Exception as e:
                                 print(f"[FaceScan] ArcFace error: {e}")
 
@@ -1195,13 +1204,18 @@ def event_snapshot(event_id):
     return Response(b"", mimetype="image/jpeg", status=404)
 
 
-@app.route("/api/face/evaluate", methods=["POST"])
+@app.route("/api/face/evaluate", methods=["GET", "POST"])
 def api_face_evaluate():
     """Run face model evaluation (buffalo_s, antelopev2, buffalo_l)."""
     try:
         from face_evaluator import get_evaluator
         evaluator = get_evaluator()
-        model = request.json.get("model") if request.is_json else None
+        model = None
+        try:
+            if request.is_json:
+                model = request.json.get("model")
+        except Exception:
+            pass
         results = evaluator.evaluate(model)
         return jsonify(results)
     except Exception as e:

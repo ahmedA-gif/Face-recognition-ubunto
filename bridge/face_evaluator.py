@@ -24,7 +24,7 @@ FRIGATE_API = os.environ.get("FRIGATE_API", "http://frigate:5000")
 EVAL_CACHE_DIR = "/app/data/eval_cache"
 os.makedirs(EVAL_CACHE_DIR, exist_ok=True)
 
-MODELS = ["buffalo_s", "antelopev2", "buffalo_l"]
+MODELS = ["buffalo_s"]  # Start with buffalo_s only; add others after evaluation confirms they work
 
 # Evaluation thresholds to sweep
 THRESHOLDS = np.arange(0.2, 0.9, 0.01)
@@ -52,6 +52,23 @@ class FaceModelEvaluator:
             return app
         except Exception as e:
             print(f"[Evaluator] Failed to load {model_name}: {e}")
+            # Try deleting corrupted model and retry
+            if "decompress" in str(e) or "block type" in str(e):
+                import shutil
+                model_dir = os.path.expanduser(f"~/.insightface/models/{model_name}")
+                if os.path.exists(model_dir):
+                    print(f"[Evaluator] Deleting corrupted model: {model_dir}")
+                    shutil.rmtree(model_dir, ignore_errors=True)
+                try:
+                    app = FaceAnalysis(
+                        name=model_name,
+                        providers=["CPUExecutionProvider"],
+                        allowed_modules=["detection", "recognition"],
+                    )
+                    app.prepare(ctx_id=0, det_size=(640, 480))
+                    return app
+                except Exception as e2:
+                    print(f"[Evaluator] Retry also failed: {e2}")
             return None
 
     def _fetch_gallery_images(self):
