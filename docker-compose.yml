@@ -45,6 +45,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./data/snapshots:/app/data/snapshots
+      - ./bridge/face_engine.py:/app/face_engine.py
+      - ./bridge/face_evaluator.py:/app/face_evaluator.py
       - /etc/localtime:/etc/localtime:ro
     environment:
       TZ: "Asia/Karachi"

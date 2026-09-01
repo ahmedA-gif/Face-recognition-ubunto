@@ -1,11 +1,12 @@
 # Bridge dependencies — Frigate-only mode
-# Frigate handles detection, tracking, face recognition
-# Bridge only does MQTT correlation, state machine, dashboard
 paho-mqtt==2.1.0
 flask==3.0.3
 requests==2.32.3
 psycopg2-binary==2.9.12
 python-dotenv==1.0.1
-# Video feed proxy (MJPEG)
 opencv-python-headless==4.10.0.84
 numpy==1.26.4
+# InsightFace ArcFace for real face recognition
+insightface==0.7.3
+onnxruntime==1.18.1
+faiss-cpu==1.8.0

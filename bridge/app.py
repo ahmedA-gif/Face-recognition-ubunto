@@ -843,19 +843,8 @@ def _update_event_sublabel(event_id, sub_label):
         print(f"[DB] Update sublabel error: {e}")
 
 
-_face_cascade = None
-_known_face_cache = {}
-
-
-def _get_face_cascade():
-    global _face_cascade
-    if _face_cascade is None:
-        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        _face_cascade = cv2.CascadeClassifier(cascade_path)
-    return _face_cascade
-
-
 def _download_image(url, timeout=5):
+    """Download image from URL and return as OpenCV frame."""
     try:
         r = requests.get(url, timeout=timeout)
         if r.status_code == 200:
@@ -866,118 +855,47 @@ def _download_image(url, timeout=5):
     return None
 
 
-def _extract_face_roi(img):
-    cascade = _get_face_cascade()
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    faces = cascade.detectMultiScale(gray, 1.05, 3, minSize=(20, 20))
-    if len(faces) > 0:
-        x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-        pad = int(max(w, h) * 0.3)
-        h_img, w_img = img.shape[:2]
-        x1 = max(0, x - pad)
-        y1 = max(0, y - pad)
-        x2 = min(w_img, x + w + pad)
-        y2 = min(h_img, y + h + pad)
-        return img[y1:y2, x1:x2]
-    h_img, w_img = img.shape[:2]
-    cy, cx = h_img // 2, w_img // 2
-    s = min(h_img, w_img) // 3
-    return img[cy-s:cy+s, cx-s:cx+s]
+def _match_face_from_snapshot(snapshot_url, track_id=None):
+    """Match face from snapshot using InsightFace ArcFace + FAISS + margin test + temporal voting.
 
+    Pipeline: frame → InsightFace det (buffalo_s) → ArcFace embed (512-D) → FAISS search → margin test → temporal vote → ID
 
-def _compare_faces(img1, img2):
-    if img1 is None or img2 is None:
-        return 0.0
-    try:
-        face1 = _extract_face_roi(img1)
-        face2 = _extract_face_roi(img2)
-        r1 = cv2.resize(face1, (100, 100))
-        r2 = cv2.resize(face2, (100, 100))
-
-        h1 = cv2.cvtColor(r1, cv2.COLOR_BGR2HSV)
-        h2 = cv2.cvtColor(r2, cv2.COLOR_BGR2HSV)
-        hist1 = cv2.calcHist([h1], [0, 1], None, [50, 60], [0, 180, 0, 256])
-        hist2 = cv2.calcHist([h2], [0, 1], None, [50, 60], [0, 180, 0, 256])
-        cv2.normalize(hist1, hist1)
-        cv2.normalize(hist2, hist2)
-        hist_score = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
-
-        diff = np.linalg.norm(r1.astype(float) - r2.astype(float))
-        norm_score = max(0.0, 1.0 - diff / 150000.0)
-
-        return hist_score * 0.5 + norm_score * 0.5
-    except Exception:
-        return 0.0
-
-
-def _load_known_faces():
-    global _known_face_cache
-    if _known_face_cache and time.time() - _known_face_cache.get("_ts", 0) < 300:
-        return _known_face_cache
-    try:
-        r = requests.get(f"{FRIGATE_API}/api/faces", timeout=10)
-        if r.status_code != 200:
-            return _known_face_cache
-        faces_data = r.json()
-        for name, files in faces_data.items():
-            if name == "train" or not isinstance(files, list):
-                continue
-            best_img = None
-            for fname in sorted(files, reverse=True):
-                if not fname.endswith(".webp"):
-                    continue
-                url = f"{FRIGATE_API}/clips/faces/{name}/{fname}"
-                img = _download_image(url)
-                if img is not None:
-                    best_img = img
-                    break
-            if best_img is not None:
-                _known_face_cache[name] = best_img
-        _known_face_cache["_ts"] = time.time()
-    except Exception as e:
-        print(f"[Face] Error loading known faces: {e}")
-    return _known_face_cache
-
-
-def _match_face_from_snapshot(snapshot_url):
-    """Match face from snapshot against known faces.
-    
-    Returns (name, score) if match found with score > threshold.
-    Returns None if no good match (person is unknown).
-    
-    Threshold: 0.55 — high enough to avoid false matches between
-    different people with similar lighting/color histograms.
+    Returns (name, score) if match found with sufficient margin.
+    Returns None if ambiguous or unknown.
     """
-    snapshot_img = _download_image(snapshot_url)
-    if snapshot_img is None:
-        return None
-    face_roi = _extract_face_roi(snapshot_img)
-    known = _load_known_faces()
-    best_name = None
-    best_score = 0.0
-    for name, known_img in known.items():
-        if name == "_ts":
-            continue
-        score = _compare_faces(face_roi, known_img)
-        if score > best_score:
-            best_score = score
-            best_name = name
-    if best_name and best_score > 0.75:
-        return (best_name, best_score)
+    try:
+        from face_engine import get_engine
+        engine = get_engine()
+        name, confidence, top1, top2, margin = engine.recognize_from_url(snapshot_url, track_id)
+        if name:
+            print(f"[FaceEngine] {snapshot_url} -> {name} (conf={confidence:.3f}, margin={margin:.3f})")
+            return (name, confidence)
+    except ImportError:
+        print("[FaceEngine] face_engine module not found, skipping")
+    except Exception as e:
+        print(f"[FaceEngine] Error: {e}")
     return None
 
 
 def _scan_face_train_files():
     """Periodically scan Frigate face directories and update person names.
-    
-    Uses BOTH known face directories (ahmed, Haseeb, etc.) AND train directory.
-    Known files: {Name}-{timestamp}.webp  (e.g., Haseeb-1788014474.510587.webp)
-    Train files: {ev_ts}-{suffix}-{face_ts}-{name}-{score}.webp
-    
-    Match person_events by time proximity to known face captures."""
-    print("[FaceScan] Starting face scanner...")
+
+    Uses FaceEngine (InsightFace ArcFace + FAISS + margin test) for accurate matching.
+    Falls back to time-proximity matching from Frigate train files if FaceEngine unavailable.
+    """
+    print("[FaceScan] Starting face scanner (ArcFace + margin test)...")
     while True:
         try:
+            # Try FaceEngine first (real ArcFace recognition)
+            face_engine = None
+            try:
+                from face_engine import get_engine
+                face_engine = get_engine()
+                if not face_engine._built:
+                    face_engine._ensure_gallery()
+            except Exception as e:
+                print(f"[FaceScan] FaceEngine unavailable: {e}")
+
             r = requests.get(f"{FRIGATE_API}/api/faces", timeout=10)
             if r.status_code != 200:
                 time.sleep(60)
@@ -994,7 +912,6 @@ def _scan_face_train_files():
                     if not fname.endswith(".webp"):
                         continue
                     base = fname.replace(".webp", "")
-                    # Format: {Name}-{timestamp}.webp
                     parts = base.rsplit("-", 1)
                     if len(parts) != 2:
                         continue
@@ -1041,24 +958,43 @@ def _scan_face_train_files():
             try:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT id, track_id, event_time, date FROM person_events "
+                        "SELECT id, track_id, event_time, date, snapshot_url FROM person_events "
                         "WHERE person_name LIKE 'Unknown%%'"
                     )
                     rows = cur.fetchall()
                     for row in rows:
-                        pe_id, pe_track_id, pe_time, pe_date = row
+                        pe_id, pe_track_id, pe_time, pe_date, pe_snapshot = row
                         try:
                             dt = datetime.strptime(f"{pe_date} {pe_time}", "%Y-%m-%d %H:%M:%S")
                             pe_ts = dt.timestamp()
                         except Exception:
                             continue
+
                         best_name = None
                         best_dist = 999
-                        for face_ts, (name, score) in face_by_time.items():
-                            dist = abs(face_ts - pe_ts)
-                            if dist < best_dist:
-                                best_dist = dist
-                                best_name = name
+
+                        # Method 1: Try FaceEngine ArcFace recognition on snapshot
+                        if face_engine and face_engine._built and pe_snapshot:
+                            try:
+                                arc_name, arc_conf, _, _, arc_margin = face_engine.recognize_from_url(
+                                    pe_snapshot, pe_track_id
+                                )
+                                if arc_name and arc_conf >= 0.45 and arc_margin >= 0.08:
+                                    best_name = arc_name
+                                    best_dist = 0
+                                    print(f"[FaceScan] ArcFace match: {pe_track_id} -> {arc_name} "
+                                          f"(conf={arc_conf:.3f}, margin={arc_margin:.3f})")
+                            except Exception as e:
+                                print(f"[FaceScan] ArcFace error: {e}")
+
+                        # Method 2: Fallback to time-proximity matching
+                        if best_name is None:
+                            for face_ts, (name, score) in face_by_time.items():
+                                dist = abs(face_ts - pe_ts)
+                                if dist < best_dist:
+                                    best_dist = dist
+                                    best_name = name
+
                         if best_name and best_dist < 60:
                             # Transfer person state from old name to new name
                             with _person_state_lock:
@@ -1257,6 +1193,42 @@ def event_snapshot(event_id):
     except Exception:
         pass
     return Response(b"", mimetype="image/jpeg", status=404)
+
+
+@app.route("/api/face/evaluate", methods=["POST"])
+def api_face_evaluate():
+    """Run face model evaluation (buffalo_s, antelopev2, buffalo_l)."""
+    try:
+        from face_evaluator import get_evaluator
+        evaluator = get_evaluator()
+        model = request.json.get("model") if request.is_json else None
+        results = evaluator.evaluate(model)
+        return jsonify(results)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/face/evaluate/report")
+def api_face_report():
+    """Get the latest face model evaluation report."""
+    try:
+        from face_evaluator import get_evaluator
+        evaluator = get_evaluator()
+        report = evaluator.get_report()
+        return jsonify(report)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/face/engine/status")
+def api_face_engine_status():
+    """Get face engine status including model info."""
+    try:
+        from face_engine import get_engine
+        engine = get_engine()
+        return jsonify(engine.status())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
