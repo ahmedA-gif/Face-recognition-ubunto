@@ -32,12 +32,12 @@ go2rtc:
 face_recognition:
   enabled: true
   model_size: large
-  # Identity is copied directly to attendance. Prefer Unknown over a weak name.
-  recognition_threshold: 0.75
-  detection_threshold: 0.35
-  unknown_score: 0.75
-  min_area: 900
-  min_faces: 2
+  # Lowered thresholds: 0.75 was too strict, causing false Unknown and cross-matching
+  recognition_threshold: 0.40
+  detection_threshold: 0.30
+  unknown_score: 0.50
+  min_area: 500
+  min_faces: 1
   save_attempts: 500
   blur_confidence_filter: true
 
