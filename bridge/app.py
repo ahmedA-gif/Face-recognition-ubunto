@@ -638,8 +638,8 @@ def _process_person_event(event):
         person_name = None
 
     # Try face matching from snapshot if name is still unknown
-    # Skip if Frigate already said unknown
-    if not person_name and not frigate_says_unknown:
+    # Always try FaceEngine even if Frigate says unknown — our ArcFace may be more accurate
+    if not person_name:
         snapshot_url = f"{FRIGATE_API}/api/events/{event_id}/snapshot.jpg"
         face_match = _match_face_from_snapshot(snapshot_url, event_id)
         if face_match:
@@ -649,12 +649,6 @@ def _process_person_event(event):
             with _counter_lock:
                 _unknown_counter += 1
                 person_name = f"Unknown#{_unknown_counter:02d}"
-    elif not person_name and frigate_says_unknown:
-        # Frigate says unknown - create Unknown#XX entry
-        with _counter_lock:
-            _unknown_counter += 1
-            person_name = f"Unknown#{_unknown_counter:02d}"
-        print(f"[Bridge] Unknown person (Frigate): {event_id} -> {person_name}")
 
     # Determine event type based on camera identity
     # - cam_entry = ENTRY (person entering)
@@ -963,7 +957,9 @@ def _scan_face_train_files():
                 with conn.cursor() as cur:
                     cur.execute(
                         "SELECT id, track_id, event_time, date FROM person_events "
-                        "WHERE person_name LIKE 'Unknown%%'"
+                        "WHERE person_name LIKE %s "
+                        "AND date >= (CURRENT_DATE - INTERVAL '1 day')::text",
+                        ('Unknown%',)
                     )
                     rows = cur.fetchall()
                     for row in rows:
@@ -986,7 +982,7 @@ def _scan_face_train_files():
                                 arc_name, arc_conf, _, _, arc_margin = face_engine.recognize_from_url(
                                     snapshot_url, str(pe_track_id)
                                 )
-                                if arc_name and arc_conf >= 0.20 and arc_margin >= 0.03:
+                                if arc_name and arc_conf >= 0.08 and arc_margin >= 0.01:
                                     best_name = arc_name
                                     best_dist = 0
                                     print(f"[FaceScan] ArcFace match: {pe_track_id} -> {arc_name} "

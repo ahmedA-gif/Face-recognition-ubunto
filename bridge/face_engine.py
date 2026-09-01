@@ -31,12 +31,12 @@ GALLERY_DIR = "/app/data/faces_gallery"
 EMBEDDING_CACHE_TTL = 300  # rebuild gallery every 5 min
 
 # Thresholds
-MATCH_THRESHOLD = 0.20      # cosine similarity threshold — lowered for CCTV snapshots (small, blurry)
-MIN_MARGIN = 0.03           # top1 - top2 across DIFFERENT identities — prevents cross-person confusion
+MATCH_THRESHOLD = 0.08      # cosine similarity threshold — very low for CCTV (tiny, blurry snapshots)
+MIN_MARGIN = 0.01           # top1 - top2 across DIFFERENT identities — minimal margin for CCTV quality
 MIN_FACE_SIZE = 40          # minimum face crop size in pixels
 QUALITY_MIN = 0.2           # minimum detection score for face to be used
 TEMPORAL_WINDOW = 5         # require N consecutive same-name matches
-TEMPORAL_CONFIDENCE = 2     # minimum votes to confirm identity
+TEMPORAL_CONFIDENCE = 1     # confirm on first match (each Frigate event = separate snapshot, not video frames)
 
 # Model selection
 MODEL_NAME = os.environ.get("FACE_MODEL", "buffalo_s")  # buffalo_s or antelopev2
@@ -218,6 +218,7 @@ class FaceEngine:
             return None, 0, 0, 0, 0
 
         if not faces:
+            print(f"[FaceEngine] No face detected in frame (shape={frame.shape})")
             return None, 0, 0, 0, 0
 
         # Use the largest/best face
@@ -226,6 +227,8 @@ class FaceEngine:
         # Quality gate
         det_score = float(best_face.det_score) if hasattr(best_face, "det_score") else 0
         if det_score < QUALITY_MIN:
+            print(f"[FaceEngine] Face quality too low: {det_score:.3f} < {QUALITY_MIN}")
+            return None, 0, 0, 0, 0
             return None, 0, 0, 0, 0
 
         # Get embedding
@@ -321,10 +324,12 @@ class FaceEngine:
         try:
             r = requests.get(image_url, timeout=5)
             if r.status_code != 200:
+                print(f"[FaceEngine] URL fetch failed: {r.status_code} for {image_url}")
                 return None, 0, 0, 0, 0
             arr = np.frombuffer(r.content, np.uint8)
             img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if img is None:
+                print(f"[FaceEngine] Image decode failed for {image_url}")
                 return None, 0, 0, 0, 0
             return self.recognize(img, track_id)
         except Exception as e:
