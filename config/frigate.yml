@@ -32,14 +32,21 @@ go2rtc:
 face_recognition:
   enabled: true
   model_size: large
-  # Lowered thresholds: 0.75 was too strict, causing false Unknown and cross-matching
-  recognition_threshold: 0.40
-  detection_threshold: 0.30
-  unknown_score: 0.50
-  min_area: 500
+  # Conservative identity thresholds.  The bridge now consumes Frigate's
+  # final sub_label directly, so do not use very low values that turn weak
+  # face crops into incorrect employee names.
+  recognition_threshold: 0.80
+  detection_threshold: 0.60
+  unknown_score: 0.70
+  min_area: 750
   min_faces: 1
   save_attempts: 500
   blur_confidence_filter: true
+
+logger:
+  logs:
+    # Keep recognition evidence in Frigate logs while validating the gallery.
+    frigate.data_processing.real_time.face: debug
 
 record:
   enabled: true

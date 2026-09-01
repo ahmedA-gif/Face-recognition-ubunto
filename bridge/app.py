@@ -40,8 +40,10 @@ DATABASE_URL = os.environ.get(
 )
 
 # ─── Entry/Exit Detection Thresholds ────────────────────────────────────────
-# Camera-identity approach with minimum movement requirements.
-# Events are emitted when person is detected at the camera with sufficient movement.
+# Frigate is the identity authority.  This bridge never guesses an identity from
+# a different event, gallery filename, or a locally-trained fallback model.
+# Direction is accepted only when the event contains the configured Frigate
+# zone transition (with a camera fallback retained for older Frigate payloads).
 
 # Minimum track requirements before emitting event
 MIN_TRACK_POINTS = 3         # Min foot-points before emitting
@@ -51,8 +53,8 @@ MIN_TRACK_DISTANCE = 0.05    # Min total y-displacement (person moved)
 # Turn-back detection
 TURN_BACK_THRESHOLD = 0.30   # Max reversal before considered turn-back
 
-# Event cooldown
-EVENT_COOLDOWN_SEC = 15        # Cooldown between events per camera
+# Event cooldown (per identity/event direction, never per camera)
+EVENT_COOLDOWN_SEC = 4
 
 # Shift configuration
 SHIFT_START = "09:00"
@@ -345,7 +347,8 @@ def _get_db():
         return _db_conn
 
 
-def _write_event(track_id, person_name, event_type, timestamp, camera, foot_point, box, confidence, zones):
+def _write_event(track_id, person_name, event_type, timestamp, camera, foot_point, box,
+                 direction_confidence, zones, face_similarity=0.0):
     conn = _get_db()
     if conn is None:
         return
@@ -358,14 +361,20 @@ def _write_event(track_id, person_name, event_type, timestamp, camera, foot_poin
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO person_events(date, track_id, person_name, event_type, event_time, "
-                "confidence, camera_id, zone, foot_y, bounding_box) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (date_str, track_id, person_name, event_type, time_str, confidence, camera, zone_str, foot_y, box_str)
+                "confidence, camera_id, zone, foot_y, bounding_box, face_similarity, identity_source) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (date_str, track_id, person_name, event_type, time_str, direction_confidence,
+                 camera, zone_str, foot_y, box_str, face_similarity, "frigate")
             )
+            # Unknown faces are evidence, not employees.  Keep their event but
+            # never create an attendance row that can later look like a person.
+            if not person_name:
+                conn.commit()
+                return
             if event_type == "ENTRY":
                 cur.execute(
-                    "SELECT id FROM attendance WHERE date = %s AND track_id = %s AND check_out_time IS NULL",
-                    (date_str, track_id)
+                    "SELECT id FROM attendance WHERE date = %s AND person_name = %s AND check_out_time IS NULL",
+                    (date_str, person_name)
                 )
                 if not cur.fetchone():
                     status = _calc_status(time_str)
@@ -376,8 +385,8 @@ def _write_event(track_id, person_name, event_type, timestamp, camera, foot_poin
                     )
             elif event_type == "EXIT":
                 cur.execute(
-                    "SELECT id, date, check_in_time FROM attendance WHERE track_id = %s AND check_out_time IS NULL ORDER BY id DESC LIMIT 1",
-                    (track_id,)
+                    "SELECT id, date, check_in_time FROM attendance WHERE person_name = %s AND check_out_time IS NULL ORDER BY id DESC LIMIT 1",
+                    (person_name,)
                 )
                 row = cur.fetchone()
                 if row:
@@ -394,6 +403,23 @@ def _write_event(track_id, person_name, event_type, timestamp, camera, foot_poin
             conn.rollback()
         except:
             pass
+
+
+def _ensure_bridge_schema():
+    """Add only the two fields needed to make Frigate identity auditable."""
+    conn = _get_db()
+    if conn is None:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE person_events ADD COLUMN IF NOT EXISTS face_similarity DOUBLE PRECISION")
+            cur.execute("ALTER TABLE person_events ADD COLUMN IF NOT EXISTS identity_source TEXT")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_person_events_track_id ON person_events(track_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_attendance_person_date ON attendance(person_name, date)")
+        conn.commit()
+    except Exception as e:
+        print(f"[DB] Schema check error: {e}")
+        conn.rollback()
 
 
 def _calc_status(time_str):
@@ -457,8 +483,69 @@ def _init_person_state_from_db():
 
 
 # ─── Event Processing ───────────────────────────────────────────────────────
-_unknown_counter = 0
-_counter_lock = threading.Lock()
+ZONE_PATHS = {
+    "cam_entry": ("outside_door", "door_threshold", "inside_room", "ENTRY"),
+    "cam_exit": ("inside_exit", "door_exit", "outside_exit", "EXIT"),
+}
+
+
+def _identity_from_frigate(sub_label):
+    """Return Frigate's own (name, similarity) without making a local guess."""
+    if isinstance(sub_label, (list, tuple)):
+        name = sub_label[0] if sub_label else None
+        score = sub_label[1] if len(sub_label) > 1 else None
+    else:
+        name, score = sub_label, None
+    if not isinstance(name, str) or not name.strip() or name.lower() == "unknown":
+        return None, 0.0
+    try:
+        score = float(score) if score is not None else 0.0
+    except (TypeError, ValueError):
+        score = 0.0
+    return name.strip(), score
+
+
+def _event_zone_sequence(event, camera, path_points):
+    """Read the zone sequence carried by Frigate, preserving the configured order.
+
+    Frigate versions differ: some expose entered_zones/path_zones and older
+    event payloads only expose the visited `zones` collection.  The latter is
+    ordered against the explicitly configured doorway path; it is never used
+    to infer an identity.
+    """
+    data = event.get("data", {}) or {}
+    raw = (event.get("entered_zones") or data.get("entered_zones") or
+           event.get("zone_history") or data.get("zone_history") or
+           event.get("zones") or data.get("zones") or [])
+    if isinstance(raw, str):
+        raw = [raw]
+    raw = [z for z in raw if isinstance(z, str)]
+    expected = ZONE_PATHS.get(camera, ())[:3]
+    if not expected:
+        return raw
+    return [z for z in expected if z in raw]
+
+
+def _direction_from_frigate(event, camera, path_points):
+    """Return direction, zone proof and confidence from this Frigate event only."""
+    zone_sequence = _event_zone_sequence(event, camera, path_points)
+    expected = ZONE_PATHS.get(camera)
+    if not expected:
+        return None, zone_sequence, 0.0
+    start_zone, middle_zone, end_zone, direction = expected
+    if zone_sequence == [start_zone, middle_zone, end_zone]:
+        return direction, zone_sequence, 1.0
+    # Older Frigate event API payloads can only retain the final zone list. Do
+    # not silently pretend this is a full zone crossing: use it as a labelled,
+    # reviewable fallback with lower confidence.
+    if len(path_points) >= MIN_TRACK_POINTS and {start_zone, middle_zone, end_zone}.issubset(set(zone_sequence)):
+        return direction, zone_sequence, 0.85
+    # Some Frigate versions only retain the final zone in the completed event.
+    # The terminal zone plus a completed track is still Frigate evidence, but
+    # is deliberately flagged with lower direction confidence in Neon/UI.
+    if len(path_points) >= MIN_TRACK_POINTS and end_zone in zone_sequence:
+        return direction, zone_sequence, 0.70
+    return None, zone_sequence, 0.0
 
 
 def _add_event(event):
@@ -469,22 +556,16 @@ def _add_event(event):
 
 
 def _process_person_event(event):
-    """Process a Frigate person detection event and analyze its trajectory."""
-    global _unknown_counter
+    """Persist one completed Frigate person event without identity guessing."""
     event_id = event.get("id", "")
     camera = event.get("camera", "")
     label = event.get("label", "")
-    start_time = event.get("start_time", 0)
     end_time = event.get("end_time")
-    top_score = event.get("data", {}).get("top_score", 0)
-    zones = event.get("zones", [])
     box = event.get("data", {}).get("box")
     path_data = event.get("data", {}).get("path_data", [])
-    sub_label = event.get("sub_label")
 
-    if label != "person":
+    if label != "person" or not event_id or camera not in ZONE_PATHS:
         return
-
     if not end_time or not box:
         return
 
@@ -506,77 +587,18 @@ def _process_person_event(event):
         except Exception:
             pass
 
-    # Fetch sub_label from individual event API (list endpoint doesn't return it)
-    if not sub_label:
-        try:
-            print(f"[Poller] Fetching sub_label for {event_id}...")
-            r2 = requests.get(f"{FRIGATE_API}/api/events/{event_id}", timeout=5)
-            if r2.status_code == 200:
-                detailed_ev = r2.json()
-                sub_label = detailed_ev.get("sub_label")
-                if sub_label:
-                    print(f"[Poller] Got sub_label for {event_id}: {sub_label}")
-                else:
-                    print(f"[Poller] No sub_label for {event_id}")
-        except Exception as e:
-            print(f"[Poller] Error fetching sub_label: {e}")
-
-    # Fallback: check face train files for recognized faces (match by time proximity)
-    frigate_says_unknown = False
-    if not sub_label:
-        try:
-            r3 = requests.get(f"{FRIGATE_API}/api/faces", timeout=5)
-            if r3.status_code == 200:
-                faces_data = r3.json()
-                train_files = faces_data.get("train", [])
-                best_match = None
-                best_score = 0
-                for fname in train_files:
-                    if not fname.endswith(".webp"):
-                        continue
-                    # Format: {event_start_ts}-{event_suffix}-{face_ts}-{name}-{score}.webp
-                    base = fname.replace(".webp", "")
-                    parts = base.split("-")
-                    if len(parts) < 4:
-                        continue
-                    name = parts[-2]
-                    try:
-                        score = float(parts[-1])
-                    except ValueError:
-                        continue
-                    # Skip low-confidence face matches (< 0.50)
-                    if score < 0.50:
-                        continue
-                    # Extract event timestamp from first part
-                    try:
-                        ev_ts = float(parts[0])
-                    except ValueError:
-                        continue
-                    # Match by time proximity (within 600 seconds of event)
-                    # Widened from 10s to 600s to catch face train files from same session
-                    if abs(ev_ts - start_time) < 600:
-                        if name.lower() == "unknown":
-                            # Frigate labeled this person as unknown
-                            frigate_says_unknown = True
-                        elif score > best_score:
-                            best_match = name
-                            best_score = score
-                if best_match:
-                    sub_label = best_match
-                    print(f"[Poller] Face match by time: {event_id} -> {sub_label} (score: {best_score:.2f})")
-                elif frigate_says_unknown:
-                    # Frigate says unknown - trust Frigate, skip our face matching
-                    print(f"[Poller] Frigate says unknown, skipping face match: {event_id}")
-        except Exception as e:
-            print(f"[Poller] Error checking face train: {e}")
-
-    # Cooldown check - skip if too soon since last event on this camera
-    with _cooldown_lock:
-        now = datetime.now()
-        last = _event_cooldowns.get(camera)
-        if last and (now - last).total_seconds() < EVENT_COOLDOWN_SEC:
-            return
-        _event_cooldowns[camera] = now
+    # The collection endpoint can omit the final sub_label.  Fetching this
+    # exact Frigate event is safe; matching it to any other event is not.
+    detailed_event = event
+    try:
+        r = requests.get(f"{FRIGATE_API}/api/events/{event_id}", timeout=5)
+        if r.status_code == 200:
+            detailed_event = r.json()
+            box = detailed_event.get("data", {}).get("box", box)
+            path_data = detailed_event.get("data", {}).get("path_data", path_data)
+    except Exception as e:
+        print(f"[Poller] Detail fetch failed for {event_id}: {e}")
+    person_name, face_score = _identity_from_frigate(detailed_event.get("sub_label"))
 
     # Extract foot points from path_data (normalized coords from Frigate)
     # path_data format: [[[x, y], timestamp], ...]
@@ -589,14 +611,32 @@ def _process_person_event(event):
     # path_points are (x, y, ts) tuples, box_point is (x, y)
     all_points = list(path_points)
     if box_point:
-        bp = (box_point[0], box_point[1], time.time())
+        # Keep the Frigate event clock.  Mixing `time.time()` with archived
+        # path timestamps immediately evicts the entire trajectory.
+        bp_ts = float(end_time) if end_time else (all_points[-1][2] if all_points else time.time())
+        bp = (box_point[0], box_point[1], bp_ts)
         if not all_points or all_points[-1][0:2] != bp[0:2]:
             all_points.append(bp)
 
     if not all_points:
         return
 
-    print(f"[Bridge] Event {event_id}: {len(all_points)} points, zones={zones}")
+    direction, zones, zone_confidence = _direction_from_frigate(detailed_event, camera, all_points)
+    if direction is None:
+        print(f"[Bridge] Ignored {event_id}: no complete Frigate doorway zone path")
+        return
+
+    # This key preserves separate people on the same camera while suppressing
+    # duplicate polling of the same finalised identity event.
+    cooldown_key = (person_name or f"unknown:{event_id}", direction)
+    with _cooldown_lock:
+        now = datetime.now()
+        last = _event_cooldowns.get(cooldown_key)
+        if last and (now - last).total_seconds() < EVENT_COOLDOWN_SEC:
+            return
+        _event_cooldowns[cooldown_key] = now
+
+    print(f"[Bridge] Frigate event {event_id}: {len(all_points)} points, zones={zones}, identity={person_name or 'Unknown'}")
 
     # Get or create track state per EVENT ID
     track_key = event_id
@@ -624,43 +664,9 @@ def _process_person_event(event):
                   f"quality={track.get_quality_score():.2f})")
         return
 
-    confidence, start_y, end_y, displacement = event_result
-
-    # Determine person name
-    if sub_label:
-        if isinstance(sub_label, list) and len(sub_label) >= 1:
-            person_name = sub_label[0]
-        elif isinstance(sub_label, str):
-            person_name = sub_label
-        else:
-            person_name = None
-    else:
-        person_name = None
-
-    # Try face matching from snapshot if name is still unknown
-    # Always try FaceEngine even if Frigate says unknown — our ArcFace may be more accurate
-    if not person_name:
-        snapshot_url = f"{FRIGATE_API}/api/events/{event_id}/snapshot.jpg"
-        face_match = _match_face_from_snapshot(snapshot_url, event_id)
-        if face_match:
-            person_name, face_score = face_match
-            print(f"[Face] Snapshot match: {event_id} -> {person_name} (score={face_score:.2f})")
-        else:
-            with _counter_lock:
-                _unknown_counter += 1
-                person_name = f"Unknown#{_unknown_counter:02d}"
-
-    # Determine event type based on camera identity
-    # - cam_entry = ENTRY (person entering)
-    # - cam_exit = EXIT (person exiting)
-    # Note: People may have entered BEFORE camera started tracking,
-    # so EXIT events are allowed even without prior ENTRY.
-    if camera == "cam_entry":
-        event_type = "ENTRY"
-    elif camera == "cam_exit":
-        event_type = "EXIT"
-    else:
-        return
+    trajectory_confidence, start_y, end_y, displacement = event_result
+    confidence = min(1.0, (trajectory_confidence + zone_confidence) / 2)
+    event_type = direction
 
     # Use current time
     ts = datetime.now()
@@ -676,16 +682,18 @@ def _process_person_event(event):
 
     # Create event record
     event_record = {
-        "person": person_name,
+        "person": person_name or "Unknown",
         "track_id": event_id,
         "direction": event_type,
         "confidence": f"{confidence:.0%}",
-        "face_score": 0.0,
+        "face_score": round(face_score, 3),
+        "identity_source": "frigate",
+        "identity_status": "known" if person_name else "unknown",
         "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
         "camera": camera,
         "zones": zones,
-        "score": round(top_score or 0, 3),
-        "type": "trajectory",
+        "score": round(face_score, 3),
+        "type": "frigate_zone_path",
         "displacement": round(displacement, 4),
         "traj_points": len(track.path),
         "quality_score": round(track.get_quality_score(), 2),
@@ -695,13 +703,15 @@ def _process_person_event(event):
     _add_event(event_record)
 
     # Write to database
-    _write_event(event_id, person_name, event_type, ts, camera, box_point, box, confidence, zones)
+    _write_event(event_id, person_name, event_type, ts, camera, box_point, box,
+                 confidence, zones, face_score)
 
     # Update person state (inside/outside)
-    _update_person_state(person_name, event_type)
+    if person_name:
+        _update_person_state(person_name, event_type)
 
-    print(f"[Bridge] {person_name} {event_type} (conf={confidence:.0%}) on {camera} "
-          f"zones={zones} disp={displacement:.3f} quality={track.get_quality_score():.2f}")
+    print(f"[Bridge] {person_name or 'Unknown'} {event_type} (direction={confidence:.0%}, "
+          f"face={face_score:.3f}, source=frigate) on {camera} zones={zones}")
 
     # Mark event as emitted so we don't emit it again for the same Frigate event
     track.event_emitted = True
@@ -792,47 +802,60 @@ def _poll_frigate():
 
 
 def _update_event_sublabel(event_id, sub_label):
-    """Update the person_name in DB when sub_label becomes available."""
+    """Apply a late Frigate identity to this exact event only."""
     conn = _get_db()
     if conn is None:
         return
-    # Handle list sub_labels
-    if isinstance(sub_label, list) and len(sub_label) >= 1:
-        person_name = sub_label[0]
-    elif isinstance(sub_label, str):
-        person_name = sub_label
-    else:
+    person_name, face_score = _identity_from_frigate(sub_label)
+    if not person_name:
         return
     try:
         with conn.cursor() as cur:
-            # Get old name before update
             cur.execute(
-                "SELECT person_name FROM person_events WHERE track_id = %s AND person_name LIKE 'Unknown%%'",
+                "SELECT person_name, event_type, date, event_time, camera_id, confidence "
+                "FROM person_events WHERE track_id = %s AND (person_name IS NULL OR person_name = 'Unknown')",
                 (event_id,)
             )
-            old_name_row = cur.fetchone()
-            old_name = old_name_row[0] if old_name_row else None
+            row = cur.fetchone()
+            if not row:
+                return False
+            _, event_type, date_str, time_str, camera, direction_confidence = row
 
             cur.execute(
-                "UPDATE person_events SET person_name = %s WHERE track_id = %s AND person_name LIKE 'Unknown%%'",
-                (person_name, event_id)
+                "UPDATE person_events SET person_name = %s, face_similarity = %s, identity_source = 'frigate' "
+                "WHERE track_id = %s AND (person_name IS NULL OR person_name = 'Unknown')",
+                (person_name, face_score, event_id)
             )
             if cur.rowcount > 0:
-                print(f"[Poller] Updated {event_id} -> {person_name}")
-            cur.execute(
-                "UPDATE attendance SET person_name = %s WHERE track_id = %s AND person_name LIKE 'Unknown%%'",
-                (person_name, event_id)
-            )
-
-            # Transfer person state from old name to new name
-            if old_name and old_name != person_name:
-                with _person_state_lock:
-                    old_state = _person_state.pop(old_name, None)
-                    if old_state:
-                        _person_state[person_name] = old_state
-                        print(f"[Poller] Transferred state from {old_name} to {person_name}")
+                if event_type == "ENTRY":
+                    cur.execute("SELECT id FROM attendance WHERE date = %s AND person_name = %s AND check_out_time IS NULL",
+                                (date_str, person_name))
+                    if not cur.fetchone():
+                        cur.execute(
+                            "INSERT INTO attendance(date, track_id, person_name, check_in_time, status, confidence, camera_id) "
+                            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                            (date_str, event_id, person_name, time_str, _calc_status(time_str), direction_confidence, camera)
+                        )
+                elif event_type == "EXIT":
+                    cur.execute("SELECT id, date, check_in_time FROM attendance WHERE person_name = %s AND check_out_time IS NULL ORDER BY id DESC LIMIT 1",
+                                (person_name,))
+                    open_row = cur.fetchone()
+                    if open_row:
+                        check_in = datetime.strptime(f"{open_row[1]} {open_row[2]}", "%Y-%m-%d %H:%M:%S")
+                        event_at = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S")
+                        hours = round((event_at - check_in).total_seconds() / 3600, 2)
+                        cur.execute("UPDATE attendance SET check_out_time = %s, work_hours = %s, camera_id = %s, updated_at = NOW() WHERE id = %s",
+                                    (time_str, hours, camera, open_row[0]))
+                _update_person_state(person_name, event_type)
+                with _events_lock:
+                    for item in _latest_events:
+                        if item["track_id"] == event_id:
+                            item.update({"person": person_name, "face_score": round(face_score, 3),
+                                         "score": round(face_score, 3), "identity_status": "known"})
+                print(f"[Poller] Frigate identity update {event_id} -> {person_name}")
 
         conn.commit()
+        return True
     except Exception as e:
         print(f"[DB] Update sublabel error: {e}")
 
@@ -1050,7 +1073,8 @@ def dashboard():
                         MAX(CASE WHEN event_type = 'EXIT' THEN event_time END) as last_exit,
                         COUNT(CASE WHEN event_type = 'ENTRY' THEN 1 END) as entry_count,
                         COUNT(CASE WHEN event_type = 'EXIT' THEN 1 END) as exit_count,
-                        ROUND(AVG(confidence)::numeric, 2) as avg_confidence
+                        ROUND(AVG(confidence)::numeric, 2) as avg_confidence,
+                        ROUND(AVG(face_similarity)::numeric, 3) as avg_face_similarity
                     FROM person_events
                     WHERE date = %s
                     GROUP BY track_id, person_name
@@ -1069,7 +1093,41 @@ def dashboard():
 @app.route("/api/events")
 def api_events():
     with _events_lock:
-        return jsonify(list(_latest_events[:200]))
+        live_events = list(_latest_events[:200])
+    # Keep the dashboard useful after a bridge restart.  In-memory events are
+    # newest; Neon fills the history without duplicating Frigate event IDs.
+    seen_ids = {item["track_id"] for item in live_events}
+    conn = _get_db()
+    if conn is None:
+        return jsonify(live_events)
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT track_id, person_name, event_type, event_time, confidence,
+                       face_similarity, identity_source, camera_id, zone
+                FROM person_events
+                ORDER BY id DESC LIMIT 200
+            """)
+            for row in cur.fetchall():
+                if row["track_id"] in seen_ids:
+                    continue
+                live_events.append({
+                    "person": row["person_name"] or "Unknown",
+                    "track_id": row["track_id"],
+                    "direction": row["event_type"],
+                    "confidence": f"{float(row['confidence'] or 0):.0%}",
+                    "face_score": float(row["face_similarity"] or 0),
+                    "identity_source": row["identity_source"] or "frigate",
+                    "identity_status": "known" if row["person_name"] else "unknown",
+                    "timestamp": str(row["event_time"]),
+                    "camera": row["camera_id"],
+                    "zones": (row["zone"] or "").split(",") if row["zone"] else [],
+                    "snapshot_url": f"/api/events/{row['track_id']}/snapshot.jpg",
+                    "type": "frigate_zone_path",
+                })
+    except Exception as e:
+        print(f"[DB] Recent events query error: {e}")
+    return jsonify(live_events[:200])
 
 
 @app.route("/api/stats")
@@ -1103,7 +1161,8 @@ def api_person_summary():
                         MAX(CASE WHEN event_type = 'EXIT' THEN event_time END) as last_exit,
                         COUNT(CASE WHEN event_type = 'ENTRY' THEN 1 END) as entry_count,
                         COUNT(CASE WHEN event_type = 'EXIT' THEN 1 END) as exit_count,
-                        ROUND(AVG(confidence)::numeric, 2) as avg_confidence
+                        ROUND(AVG(confidence)::numeric, 2) as avg_confidence,
+                        ROUND(AVG(face_similarity)::numeric, 3) as avg_face_similarity
                     FROM person_events
                     WHERE date = %s AND person_name IS NOT NULL
                     GROUP BY person_name
@@ -1115,6 +1174,7 @@ def api_person_summary():
                     entry_count,
                     exit_count,
                     avg_confidence,
+                    avg_face_similarity,
                     CASE
                         WHEN entry_count > exit_count THEN 'Inside'
                         WHEN entry_count = exit_count AND entry_count > 0 THEN 'Checked Out'
@@ -1144,6 +1204,29 @@ def api_frigate_status():
         "frigate_version": _frigate_status.get("frigate_version", "unknown"),
         "last_event": _frigate_status["last_event"],
     })
+
+
+@app.route("/api/frigate/recognition")
+def api_frigate_recognition():
+    """Expose the Frigate face-library state so recognition failures are visible."""
+    try:
+        response = requests.get(f"{FRIGATE_API}/api/faces", timeout=8)
+        if response.status_code != 200:
+            return jsonify({"connected": False, "error": f"Frigate returned {response.status_code}"}), 502
+        faces = response.json()
+        people = {name: len(files) for name, files in faces.items()
+                  if name != "train" and isinstance(files, list)}
+        training = faces.get("train", [])
+        return jsonify({
+            "connected": True,
+            "known_people": sorted(people),
+            "gallery_images": sum(people.values()),
+            "images_per_person": people,
+            "recent_recognition_attempts": len(training) if isinstance(training, list) else 0,
+            "face_recognition_enabled": True,
+        })
+    except Exception as e:
+        return jsonify({"connected": False, "error": str(e)}), 502
 
 
 @app.route("/video_feed/<camera_id>")
@@ -1242,32 +1325,11 @@ def api_face_engine_status():
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
-def _init_counter_from_db():
-    """Initialize Unknown counter from database to prevent duplicates on restart."""
-    global _unknown_counter
-    conn = _get_db()
-    if conn:
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT person_name FROM person_events WHERE person_name LIKE 'Unknown#%' ORDER BY id DESC LIMIT 1")
-                row = cur.fetchone()
-                if row:
-                    name = row[0]
-                    if name.startswith("Unknown#"):
-                        num = int(name.split("#")[1])
-                        _unknown_counter = num
-                        print(f"[Bridge] Initialized Unknown counter to {_unknown_counter}")
-        except Exception as e:
-            print(f"[Bridge] Counter init error: {e}")
-
-
 if __name__ == "__main__":
     _get_db()
-    _init_counter_from_db()
+    _ensure_bridge_schema()
     _init_person_state_from_db()
     poller = threading.Thread(target=_poll_frigate, daemon=True)
     poller.start()
-    face_scanner = threading.Thread(target=_scan_face_train_files, daemon=True)
-    face_scanner.start()
     print(f"[Bridge] Starting dashboard at http://0.0.0.0:{WEB_PORT}")
     app.run(host="0.0.0.0", port=WEB_PORT, debug=False)

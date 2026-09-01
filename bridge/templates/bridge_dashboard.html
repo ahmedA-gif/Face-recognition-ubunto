@@ -27,7 +27,7 @@
         .camera-card { background: #1a1a2e; border-radius: 12px; overflow: hidden; border: 1px solid #333; }
         .camera-card h3 { padding: 12px 16px; font-size: 14px; color: #94a3b8; border-bottom: 1px solid #333; display: flex; justify-content: space-between; }
         .camera-card img { width: 100%; display: block; background: #000; min-height: 300px; }
-        .event-list { max-height: 400px; overflow-y: auto; }
+        .event-list { max-height: 720px; overflow-y: auto; }
         .event-item { padding: 12px 16px; border-bottom: 1px solid #222; display: flex; justify-content: space-between; align-items: center; }
         .event-item:hover { background: #222; }
         .dir-entry { color: #4ade80; font-weight: 600; }
@@ -114,18 +114,18 @@
             </div>
         </div>
 
-        <!-- Face Engine Status -->
+        <!-- Frigate identity status -->
         <div class="section">
             <div class="section-header">
-                <h2>Face Engine Status</h2>
-                <span style="font-size:12px;color:#666" id="engineStatus">Loading...</span>
+                <h2>Frigate Face Recognition</h2>
+                <span style="font-size:12px;color:#4ade80" id="engineStatus">Frigate is the identity authority</span>
             </div>
             <div class="section-body">
                 <div class="grid-4" id="engineStats">
-                    <div class="stat-card"><h3>Model</h3><div class="value" id="engModel" style="font-size:20px">-</div></div>
-                    <div class="stat-card"><h3>Gallery</h3><div class="value" id="engGallery">0</div><div class="sub">embeddings</div></div>
-                    <div class="stat-card"><h3>Match Threshold</h3><div class="value" id="engThreshold" style="font-size:24px">-</div></div>
-                    <div class="stat-card"><h3>Min Margin</h3><div class="value" id="engMargin" style="font-size:24px">-</div></div>
+                    <div class="stat-card"><h3>Identity source</h3><div class="value" id="engModel" style="font-size:20px">Frigate</div></div>
+                    <div class="stat-card"><h3>Face library</h3><div class="value" id="engGallery" style="font-size:20px">Loading…</div><div class="sub">Frigate known people</div></div>
+                    <div class="stat-card"><h3>Face similarity</h3><div class="value" id="engThreshold" style="font-size:24px">Live</div></div>
+                    <div class="stat-card"><h3>Direction proof</h3><div class="value" id="engMargin" style="font-size:20px">Zones</div></div>
                 </div>
             </div>
         </div>
@@ -171,7 +171,7 @@
                             <th>Last Exit</th>
                             <th>Entries</th>
                             <th>Exits</th>
-                            <th>Avg Confidence</th>
+                            <th>Frigate Face Score</th>
                             <th>Status</th>
                         </tr>
                     </thead>
@@ -229,11 +229,12 @@
 
         async function refreshAll() {
             try {
-                const [statsRes, eventsRes, summaryRes, tracksRes] = await Promise.all([
+                const [statsRes, eventsRes, summaryRes, tracksRes, recognitionRes] = await Promise.all([
                     fetch('/api/stats'),
                     fetch('/api/events'),
                     fetch('/api/person_summary'),
                     fetch('/api/tracks'),
+                    fetch('/api/frigate/recognition'),
                 ]);
 
                 const stats = await statsRes.json();
@@ -242,12 +243,13 @@
                 document.getElementById('totalEntries').textContent = stats.total_entries || 0;
                 document.getElementById('totalExits').textContent = stats.total_exits || 0;
 
+
                 // Timeline
                 const summary = await summaryRes.json();
                 const tbody = document.getElementById('timelineBody');
                 if (Array.isArray(summary) && summary.length > 0) {
                     tbody.innerHTML = summary.map(p => {
-                        const conf = p.avg_confidence || 0;
+                        const conf = p.avg_face_similarity || 0;
                         return `<tr>
                             <td><strong>${p.person_name}</strong></td>
                             <td class="timeline-entry">${p.first_entry || '-'}</td>
@@ -266,6 +268,14 @@
                 }
 
                 // Events
+                const recognitionData = await recognitionRes.json();
+                document.getElementById('engGallery').textContent = recognitionData.connected
+                    ? `${(recognitionData.known_people || []).length} people / ${recognitionData.gallery_images || 0} faces`
+                    : 'Frigate Face Library unavailable';
+                document.getElementById('engineStatus').textContent = recognitionData.connected
+                    ? `Recent recognition attempts: ${recognitionData.recent_recognition_attempts || 0} · ${ (recognitionData.known_people || []).join(', ') || 'no known people'}`
+                    : `Recognition check failed: ${recognitionData.error || 'unknown error'}`;
+
                 const events = await eventsRes.json();
                 const list = document.getElementById('eventList');
                 document.getElementById('eventCount').textContent = events.length + ' events';
@@ -277,12 +287,13 @@
                         const confClass = 'conf-' + (e.confidence || 'none');
                         const snapshotUrl = e.snapshot_url || `/api/events/${e.track_id}/snapshot.jpg`;
                         return `<div class="event-item" style="display:flex;gap:12px;align-items:center">
-                            <img src="${snapshotUrl}" style="width:60px;height:45px;object-fit:cover;border-radius:4px;background:#222" onerror="this.style.display='none'">
+                            <img src="${snapshotUrl}" style="width:220px;height:160px;object-fit:cover;border-radius:8px;background:#222" onerror="this.style.display='none'">
                             <div style="flex:1">
-                                <span style="font-weight:600">${e.person}</span>
-                                <span class="${dirClass}"> ${e.direction}</span>
-                                <span class="conf-badge ${confClass}">${e.confidence}</span>
-                                <span style="font-size:11px;color:#666"> via ${e.camera}</span>
+                                <div><span style="font-size:18px;font-weight:700">${e.person}</span>
+                                <span class="${dirClass}" style="font-size:17px"> ${e.direction}</span></div>
+                                <div style="margin-top:8px"><span class="conf-badge ${confClass}">Frigate face similarity ${simPct(e.face_score || 0)}</span></div>
+                                <div style="margin-top:8px;font-size:12px;color:#aaa">Frigate person event · ${e.camera}</div>
+                                <div style="margin-top:4px;font-size:12px;color:#888">Door zones: ${(e.zones || []).join(' → ') || 'not supplied'}</div>
                             </div>
                             <span style="font-size:12px;color:#888">${e.timestamp}</span>
                         </div>`;
@@ -312,20 +323,6 @@
                     }).join('');
                 }
                 } catch(e) { console.error('Refresh error:', e); }
-        }
-
-        // Face Engine Status
-        async function refreshEngine() {
-            try {
-                const res = await fetch('/api/face/engine/status');
-                const data = await res.json();
-                document.getElementById('engModel').textContent = data.model || '-';
-                document.getElementById('engGallery').textContent = data.gallery_size || 0;
-                document.getElementById('engThreshold').textContent = (data.match_threshold || 0).toFixed(2);
-                document.getElementById('engMargin').textContent = (data.min_margin || 0).toFixed(2);
-                document.getElementById('engineStatus').textContent =
-                    `Gallery: ${(data.gallery_people||[]).join(', ')} | Last build: ${data.last_build || 'never'}`;
-            } catch(e) { console.error('Engine status error:', e); }
         }
 
         // Model Evaluation
@@ -386,10 +383,7 @@
         }
 
         refreshAll();
-        refreshEngine();
-        loadEvalReport();
         setInterval(refreshAll, 3000);
-        setInterval(refreshEngine, 30000);
     </script>
 </body>
 </html>
