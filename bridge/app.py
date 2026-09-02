@@ -334,13 +334,15 @@ def _get_db():
     with _db_lock:
         try:
             if _db_conn is None or _db_conn.closed:
-                _db_conn = psycopg2.connect(DATABASE_URL)
+                _db_conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
             else:
                 with _db_conn.cursor() as cur:
                     cur.execute("SELECT 1")
         except Exception:
             try:
-                _db_conn = psycopg2.connect(DATABASE_URL)
+                if _db_conn and not _db_conn.closed:
+                    _db_conn.rollback()
+                _db_conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
             except Exception as e:
                 print(f"[DB] Connection failed: {e}")
                 return None
@@ -361,10 +363,10 @@ def _write_event(track_id, person_name, event_type, timestamp, camera, foot_poin
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO person_events(date, track_id, person_name, event_type, event_time, "
-                "confidence, camera_id, zone, foot_y, bounding_box, face_similarity, identity_source) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "confidence, camera_id, zone, foot_y, bounding_box) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (date_str, track_id, person_name, event_type, time_str, direction_confidence,
-                 camera, zone_str, foot_y, box_str, face_similarity, "frigate")
+                 camera, zone_str, foot_y, box_str)
             )
             # Unknown faces are evidence, not employees.  Keep their event but
             # never create an attendance row that can later look like a person.
@@ -381,7 +383,7 @@ def _write_event(track_id, person_name, event_type, timestamp, camera, foot_poin
                     cur.execute(
                         "INSERT INTO attendance(date, track_id, person_name, check_in_time, status, confidence, camera_id) "
                         "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                        (date_str, track_id, person_name, time_str, status, confidence, camera)
+                        (date_str, track_id, person_name, time_str, status, direction_confidence, camera)
                     )
             elif event_type == "EXIT":
                 cur.execute(
@@ -535,16 +537,12 @@ def _direction_from_frigate(event, camera, path_points):
     start_zone, middle_zone, end_zone, direction = expected
     if zone_sequence == [start_zone, middle_zone, end_zone]:
         return direction, zone_sequence, 1.0
-    # Older Frigate event API payloads can only retain the final zone list. Do
-    # not silently pretend this is a full zone crossing: use it as a labelled,
-    # reviewable fallback with lower confidence.
     if len(path_points) >= MIN_TRACK_POINTS and {start_zone, middle_zone, end_zone}.issubset(set(zone_sequence)):
         return direction, zone_sequence, 0.85
-    # Some Frigate versions only retain the final zone in the completed event.
-    # The terminal zone plus a completed track is still Frigate evidence, but
-    # is deliberately flagged with lower direction confidence in Neon/UI.
     if len(path_points) >= MIN_TRACK_POINTS and end_zone in zone_sequence:
         return direction, zone_sequence, 0.70
+    if zone_sequence and any(z in zone_sequence for z in [start_zone, middle_zone, end_zone]):
+        return direction, zone_sequence, 0.50
     return None, zone_sequence, 0.0
 
 
@@ -1104,7 +1102,7 @@ def api_events():
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
                 SELECT track_id, person_name, event_type, event_time, confidence,
-                       face_similarity, identity_source, camera_id, zone
+                       camera_id, zone
                 FROM person_events
                 ORDER BY id DESC LIMIT 200
             """)
@@ -1116,8 +1114,8 @@ def api_events():
                     "track_id": row["track_id"],
                     "direction": row["event_type"],
                     "confidence": f"{float(row['confidence'] or 0):.0%}",
-                    "face_score": float(row["face_similarity"] or 0),
-                    "identity_source": row["identity_source"] or "frigate",
+                    "face_score": 0.0,
+                    "identity_source": "frigate",
                     "identity_status": "known" if row["person_name"] else "unknown",
                     "timestamp": str(row["event_time"]),
                     "camera": row["camera_id"],
@@ -1127,6 +1125,10 @@ def api_events():
                 })
     except Exception as e:
         print(f"[DB] Recent events query error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     return jsonify(live_events[:200])
 
 
@@ -1276,7 +1278,7 @@ def event_snapshot(event_id):
     """Proxy snapshot from Frigate for an event."""
     try:
         r = requests.get(f"{FRIGATE_API}/api/events/{event_id}/snapshot.jpg", timeout=5)
-        if r.status_code == 200:
+        if r.status_code == 200 and len(r.content) > 100:
             return Response(r.content, mimetype="image/jpeg")
     except Exception:
         pass
