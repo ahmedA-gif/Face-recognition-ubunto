@@ -594,7 +594,39 @@ def _process_person_event(event):
             path_data = detailed_event.get("data", {}).get("path_data", path_data)
     except Exception as e:
         print(f"[Poller] Detail fetch failed for {event_id}: {e}")
-    person_name, _ = _identity_from_frigate(detailed_event.get("sub_label"))
+    frigate_name, _ = _identity_from_frigate(detailed_event.get("sub_label"))
+
+    # ─── InsightFace verification ─────────────────────────────────────────
+    # Use ArcFace to verify Frigate's identity. If InsightFace disagrees,
+    # prefer InsightFace (more accurate with our gallery).
+    person_name = frigate_name
+    try:
+        from face_engine import get_engine
+        engine = get_engine()
+        engine._ensure_gallery()
+        if engine._built:
+            snap_url = f"{FRIGATE_API}/api/events/{event_id}/snapshot.jpg"
+            arc_name, arc_conf, top1, top2, margin = engine.recognize_from_url(
+                snap_url, track_id=event_id
+            )
+            if arc_name:
+                # InsightFace matched — use it (overrides Frigate if different)
+                if frigate_name and frigate_name != arc_name:
+                    print(f"[Verify] Frigate={frigate_name} vs InsightFace={arc_name} — using InsightFace")
+                person_name = arc_name
+                print(f"[Verify] InsightFace MATCH: {event_id} -> {arc_name} (conf={arc_conf:.3f}, margin={margin:.3f})")
+            elif top1 > 0:
+                # InsightFace detected face but no match above threshold
+                if frigate_name:
+                    print(f"[Verify] Frigate={frigate_name} but InsightFace=no match — marking Unknown")
+                person_name = None
+            else:
+                # InsightFace couldn't detect a face — fall back to Frigate
+                print(f"[Verify] No face in snapshot — using Frigate identity: {frigate_name or 'Unknown'}")
+    except ImportError:
+        print("[Verify] FaceEngine not available, using Frigate identity")
+    except Exception as e:
+        print(f"[Verify] InsightFace error: {e}, using Frigate identity")
 
     # Extract foot points from path_data (normalized coords from Frigate)
     # path_data format: [[[x, y], timestamp], ...]
@@ -796,13 +828,36 @@ def _poll_frigate():
 
 
 def _update_event_sublabel(event_id, sub_label):
-    """Apply a late Frigate identity to this exact event only."""
+    """Apply a late Frigate identity to this exact event only, verified by InsightFace."""
     conn = _get_db()
     if conn is None:
         return
-    person_name, _ = _identity_from_frigate(sub_label)
-    if not person_name:
+    frigate_name, _ = _identity_from_frigate(sub_label)
+    if not frigate_name:
         return
+
+    # Verify with InsightFace before applying
+    person_name = frigate_name
+    try:
+        from face_engine import get_engine
+        engine = get_engine()
+        engine._ensure_gallery()
+        if engine._built:
+            snap_url = f"{FRIGATE_API}/api/events/{event_id}/snapshot.jpg"
+            arc_name, arc_conf, top1, top2, margin = engine.recognize_from_url(
+                snap_url, track_id=event_id
+            )
+            if arc_name:
+                if frigate_name != arc_name:
+                    print(f"[Verify] Late sublabel: Frigate={frigate_name} vs InsightFace={arc_name} — using InsightFace")
+                person_name = arc_name
+            elif top1 > 0:
+                print(f"[Verify] Late sublabel: Frigate={frigate_name} but InsightFace=no match — skipping")
+                return
+            else:
+                print(f"[Verify] Late sublabel: No face in snapshot — using Frigate: {frigate_name}")
+    except Exception:
+        pass
     try:
         with conn.cursor() as cur:
             cur.execute(
