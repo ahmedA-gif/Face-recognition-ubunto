@@ -350,7 +350,7 @@ def _get_db():
 
 
 def _write_event(track_id, person_name, event_type, timestamp, camera, foot_point, box,
-                 direction_confidence, zones, face_similarity=0.0):
+                 direction_confidence, zones):
     conn = _get_db()
     if conn is None:
         return
@@ -408,14 +408,12 @@ def _write_event(track_id, person_name, event_type, timestamp, camera, foot_poin
 
 
 def _ensure_bridge_schema():
-    """Add only the two fields needed to make Frigate identity auditable."""
+    """Add only the fields needed to make Frigate identity auditable."""
     conn = _get_db()
     if conn is None:
         return
     try:
         with conn.cursor() as cur:
-            cur.execute("ALTER TABLE person_events ADD COLUMN IF NOT EXISTS face_similarity DOUBLE PRECISION")
-            cur.execute("ALTER TABLE person_events ADD COLUMN IF NOT EXISTS identity_source TEXT")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_person_events_track_id ON person_events(track_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_attendance_person_date ON attendance(person_name, date)")
         conn.commit()
@@ -596,7 +594,7 @@ def _process_person_event(event):
             path_data = detailed_event.get("data", {}).get("path_data", path_data)
     except Exception as e:
         print(f"[Poller] Detail fetch failed for {event_id}: {e}")
-    person_name, face_score = _identity_from_frigate(detailed_event.get("sub_label"))
+    person_name, _ = _identity_from_frigate(detailed_event.get("sub_label"))
 
     # Extract foot points from path_data (normalized coords from Frigate)
     # path_data format: [[[x, y], timestamp], ...]
@@ -684,13 +682,11 @@ def _process_person_event(event):
         "track_id": event_id,
         "direction": event_type,
         "confidence": f"{confidence:.0%}",
-        "face_score": round(face_score, 3),
         "identity_source": "frigate",
         "identity_status": "known" if person_name else "unknown",
         "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
         "camera": camera,
         "zones": zones,
-        "score": round(face_score, 3),
         "type": "frigate_zone_path",
         "displacement": round(displacement, 4),
         "traj_points": len(track.path),
@@ -702,14 +698,14 @@ def _process_person_event(event):
 
     # Write to database
     _write_event(event_id, person_name, event_type, ts, camera, box_point, box,
-                 confidence, zones, face_score)
+                 confidence, zones)
 
     # Update person state (inside/outside)
     if person_name:
         _update_person_state(person_name, event_type)
 
     print(f"[Bridge] {person_name or 'Unknown'} {event_type} (direction={confidence:.0%}, "
-          f"face={face_score:.3f}, source=frigate) on {camera} zones={zones}")
+          f"source=frigate) on {camera} zones={zones}")
 
     # Mark event as emitted so we don't emit it again for the same Frigate event
     track.event_emitted = True
@@ -804,7 +800,7 @@ def _update_event_sublabel(event_id, sub_label):
     conn = _get_db()
     if conn is None:
         return
-    person_name, face_score = _identity_from_frigate(sub_label)
+    person_name, _ = _identity_from_frigate(sub_label)
     if not person_name:
         return
     try:
@@ -820,9 +816,8 @@ def _update_event_sublabel(event_id, sub_label):
             _, event_type, date_str, time_str, camera, direction_confidence = row
 
             cur.execute(
-                "UPDATE person_events SET person_name = %s, face_similarity = %s, identity_source = 'frigate' "
-                "WHERE track_id = %s AND (person_name IS NULL OR person_name = 'Unknown')",
-                (person_name, face_score, event_id)
+                "UPDATE person_events SET person_name = %s WHERE track_id = %s AND (person_name IS NULL OR person_name = 'Unknown')",
+                (person_name, event_id)
             )
             if cur.rowcount > 0:
                 if event_type == "ENTRY":
@@ -848,8 +843,7 @@ def _update_event_sublabel(event_id, sub_label):
                 with _events_lock:
                     for item in _latest_events:
                         if item["track_id"] == event_id:
-                            item.update({"person": person_name, "face_score": round(face_score, 3),
-                                         "score": round(face_score, 3), "identity_status": "known"})
+                            item.update({"person": person_name, "identity_status": "known"})
                 print(f"[Poller] Frigate identity update {event_id} -> {person_name}")
 
         conn.commit()
@@ -1071,8 +1065,7 @@ def dashboard():
                         MAX(CASE WHEN event_type = 'EXIT' THEN event_time END) as last_exit,
                         COUNT(CASE WHEN event_type = 'ENTRY' THEN 1 END) as entry_count,
                         COUNT(CASE WHEN event_type = 'EXIT' THEN 1 END) as exit_count,
-                        ROUND(AVG(confidence)::numeric, 2) as avg_confidence,
-                        ROUND(AVG(face_similarity)::numeric, 3) as avg_face_similarity
+                        ROUND(AVG(confidence)::numeric, 2) as avg_confidence
                     FROM person_events
                     WHERE date = %s
                     GROUP BY track_id, person_name
@@ -1114,7 +1107,6 @@ def api_events():
                     "track_id": row["track_id"],
                     "direction": row["event_type"],
                     "confidence": f"{float(row['confidence'] or 0):.0%}",
-                    "face_score": 0.0,
                     "identity_source": "frigate",
                     "identity_status": "known" if row["person_name"] else "unknown",
                     "timestamp": str(row["event_time"]),
@@ -1163,8 +1155,7 @@ def api_person_summary():
                         MAX(CASE WHEN event_type = 'EXIT' THEN event_time END) as last_exit,
                         COUNT(CASE WHEN event_type = 'ENTRY' THEN 1 END) as entry_count,
                         COUNT(CASE WHEN event_type = 'EXIT' THEN 1 END) as exit_count,
-                        ROUND(AVG(confidence)::numeric, 2) as avg_confidence,
-                        ROUND(AVG(face_similarity)::numeric, 3) as avg_face_similarity
+                        ROUND(AVG(confidence)::numeric, 2) as avg_confidence
                     FROM person_events
                     WHERE date = %s AND person_name IS NOT NULL
                     GROUP BY person_name
@@ -1176,7 +1167,6 @@ def api_person_summary():
                     entry_count,
                     exit_count,
                     avg_confidence,
-                    avg_face_similarity,
                     CASE
                         WHEN entry_count > exit_count THEN 'Inside'
                         WHEN entry_count = exit_count AND entry_count > 0 THEN 'Checked Out'

@@ -37,8 +37,6 @@
         .conf-single { background: #3d3d00; color: #fbbf24; }
         .conf-conflict { background: #4d3d00; color: #fb923c; }
         .conf-none { background: #4d1a1a; color: #f87171; }
-        .sim-bar { display: inline-block; width: 60px; height: 6px; background: #333; border-radius: 3px; overflow: hidden; vertical-align: middle; margin-left: 6px; }
-        .sim-fill { height: 100%; border-radius: 3px; }
         .timeline-table { width: 100%; border-collapse: collapse; }
         .timeline-table th { text-align: left; padding: 10px 12px; font-size: 12px; color: #888; border-bottom: 1px solid #333; text-transform: uppercase; }
         .timeline-table td { padding: 10px 12px; border-bottom: 1px solid #222; font-size: 13px; }
@@ -171,12 +169,11 @@
                             <th>Last Exit</th>
                             <th>Entries</th>
                             <th>Exits</th>
-                            <th>Frigate Face Score</th>
                             <th>Status</th>
                         </tr>
                     </thead>
                     <tbody id="timelineBody">
-                        <tr><td colspan="7" style="color:#666;text-align:center;padding:20px">Waiting for events...</td></tr>
+                        <tr><td colspan="6" style="color:#666;text-align:center;padding:20px">Waiting for events...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -222,9 +219,6 @@
     </div>
 
     <script>
-        function simColor(s) { return s >= 0.8 ? '#4ade80' : s >= 0.6 ? '#fbbf24' : '#f87171'; }
-        function simPct(s) { return Math.round(s * 100) + '%'; }
-
         document.getElementById('todayDate').textContent = new Date().toLocaleDateString();
 
         async function refreshAll() {
@@ -249,22 +243,17 @@
                 const tbody = document.getElementById('timelineBody');
                 if (Array.isArray(summary) && summary.length > 0) {
                     tbody.innerHTML = summary.map(p => {
-                        const conf = p.avg_face_similarity || 0;
                         return `<tr>
                             <td><strong>${p.person_name}</strong></td>
                             <td class="timeline-entry">${p.first_entry || '-'}</td>
                             <td class="timeline-exit">${p.last_exit || '-'}</td>
                             <td>${p.entry_count || 0}</td>
                             <td>${p.exit_count || 0}</td>
-                            <td>
-                                ${simPct(conf)}
-                                <span class="sim-bar"><span class="sim-fill" style="width:${simPct(conf)};background:${simColor(conf)}"></span></span>
-                            </td>
                             <td style="color:${p.status === 'Inside' ? '#fbbf24' : p.status === 'Checked Out' ? '#4ade80' : '#888'};font-weight:600">${p.status || 'Unknown'}</td>
                         </tr>`;
                     }).join('');
                 } else {
-                    tbody.innerHTML = '<tr><td colspan="7" style="color:#666;text-align:center;padding:20px">No person data yet. Walk through the door.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="6" style="color:#666;text-align:center;padding:20px">No person data yet. Walk through the door.</td></tr>';
                 }
 
                 // Events
@@ -287,11 +276,14 @@
                         const confClass = 'conf-' + (e.confidence || 'none');
                         const snapshotUrl = e.snapshot_url || `/api/events/${e.track_id}/snapshot.jpg`;
                         return `<div class="event-item" style="display:flex;gap:12px;align-items:center">
-                            <img src="${snapshotUrl}" style="width:220px;height:160px;object-fit:cover;border-radius:8px;background:#222" onerror="this.style.display='none'">
+                            <div style="width:220px;height:160px;border-radius:8px;background:#1a1a2e;flex-shrink:0;position:relative;overflow:hidden">
+                                <img src="${snapshotUrl}" style="width:220px;height:160px;object-fit:cover;border-radius:8px" onerror="this.style.display='none'">
+                                <div style="position:absolute;top:0;left:0;width:100%;height:100%;display:none;align-items:center;justify-content:center;color:#555;font-size:11px" class="no-snap">No snapshot</div>
+                            </div>
                             <div style="flex:1">
                                 <div><span style="font-size:18px;font-weight:700">${e.person}</span>
                                 <span class="${dirClass}" style="font-size:17px"> ${e.direction}</span></div>
-                                <div style="margin-top:8px"><span class="conf-badge ${confClass}">Frigate face similarity ${simPct(e.face_score || 0)}</span></div>
+                                <div style="margin-top:8px"><span class="conf-badge conf-single">${e.confidence} confidence</span></div>
                                 <div style="margin-top:8px;font-size:12px;color:#aaa">Frigate person event · ${e.camera}</div>
                                 <div style="margin-top:4px;font-size:12px;color:#888">Door zones: ${(e.zones || []).join(' → ') || 'not supplied'}</div>
                             </div>
